@@ -14,66 +14,60 @@
 # limitations under the License.
 #
 
+#include "../../asm_macros.inc"
 
 #
 # This validates the memory subsystem by writing a pseudorandom memory pattern
 # across all of SDRAM, then reading it back to verify it is unchanged.  It
-# assumes 128MB of SDRAM, starting at address 0. It skips the first 4k, which
+# assumes 128MB of SDRAM, starting at address 0. It skips the first 8k, which
 # contains this code. The test takes around 30 seconds to run, during which
-# there isn't any feedback.  When it completes, it will light up all of the
-# green LEDs to indicate success and all of the red LEDs to indicate failure.
+# there isn't any feedback.  When it completes, it will print PASS or FAIL
+# to the serial port.
 #
 
-                .global _start
-_start:         load_32     s0, base_addr
-                load_32     s1, test_length    # Size to copy
-                load_32     s2, seed
-                load_32     s3, generator_a
-                load_32     s4, generator_c
+#define BASE_ADDR 0x2000
+#define TEST_LENGTH (0x8000000 - 0x2000)
+#define SEED 0xdeadbeef
+#define GENERATOR_A 1103515245
+#define GENERATOR_C 12345
+#define DEVICE_BASE 0xffff0000
 
-fill_loop:      store_32    s2, (s0)
+
+                .global _start
+_start:         li s0, BASE_ADDR
+                li s1, TEST_LENGTH
+                li s2, SEED
+                li s3, GENERATOR_A
+                li s4, GENERATOR_C
+
+fill_loop:      store_32 s2, (s0)
 
                 # Compute next random number
-                mull_i       s2, s2, s3
-                add_i       s2, s2, s4
+                mull_i s2, s2, s3
+                add_i s2, s2, s4
 
                 # Increment and loop
-                add_i       s0, s0, 4      # Increment pionter
-                sub_i       s1, s1, 4      # Decrement count
-                btrue       s1, fill_loop
+                add_i s0, s0, 4      # Increment pionter
+                sub_i s1, s1, 4      # Decrement count
+                bnz s1, fill_loop
 
                 # Now check the pattern
-                load_32     s0, base_addr
-                load_32     s1, test_length    # Size to copy
-                load_32     s2, seed
+                li s0, BASE_ADDR
+                li s1, TEST_LENGTH    # Size to copy
+                li s2, SEED
 
 check_loop:     load_32 s5, (s0)
                 cmpne_i s6, s5, s2
-                btrue s6, error
+                bnz s6, error
 
                 # Compute next random number
                 mull_i       s2, s2, s3
                 add_i       s2, s2, s4
 
                 # Increment and loop
-                add_i       s0, s0, 4      # Increment pionter
-                sub_i       s1, s1, 4      # Decrement count
-                btrue       s1, check_loop
+                add_i s0, s0, 4      # Increment pointer
+                sub_i s1, s1, 4      # Decrement count
+                bnz s1, check_loop
+                call pass_test
 
-success:        load_32 s0, device_base
-                move s1, 0xffff
-                store_32 s1, 4(s0)          # Green LEDs
-done0:          goto done0
-
-error:          load_32 s0, device_base
-                move s1, 0xffff
-                store_32 s1, 0(s0)          # Red LEDs
-done1:          goto done1
-
-base_addr:      .long 0x1000
-test_length:    .long 0x8000000 - 0x1000
-seed:           .long 0xdeadbeef
-generator_a:    .long 1103515245
-generator_c:    .long 12345
-device_base:    .long 0xffff0000
-
+error:          call fail_test

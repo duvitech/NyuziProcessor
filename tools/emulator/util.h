@@ -14,12 +14,14 @@
 // limitations under the License.
 //
 
-#ifndef __UTIL_H
-#define __UTIL_H
+#ifndef UTIL_H
+#define UTIL_H
 
 #include <errno.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/select.h>
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -30,7 +32,7 @@
 #define UINT16_PTR(memory, address) ((uint16_t*)(memory) + (address) / 2)
 #define UINT32_PTR(memory, address) ((uint32_t*)(memory) + (address) / 4)
 
-static inline uint32_t endianSwap32(uint32_t value)
+static inline uint32_t endian_swap32(uint32_t value)
 {
     return ((value & 0x000000ff) << 24)
            | ((value & 0x0000ff00) << 8)
@@ -38,15 +40,15 @@ static inline uint32_t endianSwap32(uint32_t value)
            | ((value & 0xff000000) >> 24);
 }
 
-static inline uint32_t extractUnsignedBits(uint32_t word, uint32_t lowBitOffset, uint32_t size)
+static inline uint32_t extract_unsigned_bits(uint32_t word, uint32_t low_bit, uint32_t size)
 {
-    return (word >> lowBitOffset) & ((1u << size) - 1);
+    return (word >> low_bit) & ((1u << size) - 1);
 }
 
-static inline uint32_t extractSignedBits(uint32_t word, uint32_t lowBitOffset, uint32_t size)
+static inline uint32_t extract_signed_bits(uint32_t word, uint32_t low_bit, uint32_t size)
 {
     uint32_t mask = (1u << size) - 1;
-    uint32_t value = (word >> lowBitOffset) & mask;
+    uint32_t value = (word >> low_bit) & mask;
     if (value & (1u << (size - 1)))
         value |= ~mask;	// Sign extend
 
@@ -55,7 +57,7 @@ static inline uint32_t extractSignedBits(uint32_t word, uint32_t lowBitOffset, u
 
 // Treat integer bitpattern as float without converting
 // This is legal in C99
-static inline float valueAsFloat(uint32_t value)
+static inline float value_as_float(uint32_t value)
 {
     union
     {
@@ -67,7 +69,7 @@ static inline float valueAsFloat(uint32_t value)
 }
 
 // Treat floating point bitpattern as int without converting
-static inline uint32_t valueAsInt(float value)
+static inline uint32_t value_as_int(float value)
 {
     union
     {
@@ -75,32 +77,56 @@ static inline uint32_t valueAsInt(float value)
         uint32_t i;
     } u = { .f = value };
 
-    // The contents of the significand of a NaN result is not fully determined
-    // in the spec.  For consistency in cosimulation, convert to a common form
-    // when it is detected.
-    if (((u.i >> 23) & 0xff) == 0xff && (u.i & 0x7fffff) != 0)
+    // x86 at least propagates NaN as recommended (but not required) by IEEE754,
+    // but Nyuzi uses a consistent NaN representation for simplicity.
+    if (isnan(value))
         return 0x7fffffff;
 
     return u.i;
 }
 
-static inline int canReadFileDescriptor(int fd)
+// This returns true if there are bytes available for reading *or*
+// reading it would return an error.
+static inline bool can_read_file_descriptor(int fd)
 {
-    fd_set readFds;
+    fd_set read_fds;
     int result;
     struct timeval timeout;
 
     do
     {
-        FD_ZERO(&readFds);
-        FD_SET(fd, &readFds);
+        FD_ZERO(&read_fds);
+        FD_SET(fd, &read_fds);
         timeout.tv_sec = 0;
         timeout.tv_usec = 0;
-        result = select(fd + 1, &readFds, NULL, NULL, &timeout);
+        result = select(fd + 1, &read_fds, NULL, NULL, &timeout);
     }
     while (result < 0 && errno == EINTR);
 
-    return result;
+    return result != 0;
 }
 
+// Returns 0 if successful, -1 if there was a format error in the string.
+int parse_hex_vector(const char *str, uint32_t *vector_values, bool endian_swap);
+
+// Return the index of the next lowest set bit at or below index (with 0
+// being the least signficant bit). If there is no set bits below the index,
+// wrap around and search from the the most significand bit position.
+// The result is undefined if bitmask is 0
+static inline uint32_t next_set_bit(uint32_t bitmask, uint32_t index)
+{
+    const uint32_t lower_mask = ((1 << (index + 1)) - 1) & bitmask;
+    if (lower_mask)
+        return 31 - (uint32_t) __builtin_clz(lower_mask);
+
+    // Couldn't find a set bit, search from topmost bit
+    return 31 - (uint32_t) __builtin_clz(bitmask);
+}
+
+void seed_random(uint64_t value);
+uint64_t next_random(void);
+
+uint64_t current_time_us(void);
+
 #endif
+

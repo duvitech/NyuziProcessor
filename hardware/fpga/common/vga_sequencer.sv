@@ -30,10 +30,10 @@
 module vga_sequencer(
     input                       clk,
     input                       reset,
-    output                      vga_vs,
-    output                      vga_hs,
-    output                      start_dma,
-    output                      in_visible_region,
+    output logic                vga_vs,
+    output logic                vga_hs,
+    output logic                start_frame,
+    output logic                in_visible_region,
     output logic                pixel_en,
     input                       sequencer_en,
     input                       prog_write_en,
@@ -86,7 +86,7 @@ module vga_sequencer(
         : counter[current_uop.counter_select] - counter_t'(1);
     assign vga_vs = current_uop.vsync && sequencer_en;
     assign vga_hs = current_uop.hsync && sequencer_en;
-    assign start_dma = pc == 0 && sequencer_en;
+    assign start_frame = pc == 0 && sequencer_en;
     assign in_visible_region = current_uop.in_visible_region && sequencer_en;
     assign branch_en = current_uop.frame_done || (current_uop.instruction_type == LOOP
         && counter_nxt != 0);
@@ -134,9 +134,3 @@ module vga_sequencer(
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-library-flags:("-y ../../core" "-y ../../testbench")
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

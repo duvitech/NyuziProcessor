@@ -6,11 +6,11 @@
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * 	Unless required by applicable law or agreed to in writing, software
- * 	distributed under the License is distributed on an "AS IS" BASIS,
- * 	WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * 	See the License for the specific language governing permissions and
- * 	limitations under the License.
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
  */
 
 /***  arithmetic  ***/
@@ -38,7 +38,7 @@ float mag2(const vecf16 &v1)
 
 vecf16 mul(const matrix &m1, const vecf16 &v2)
 {
-    int i, j;
+    int i;
     vecf16 v_ret;
     vecf16 v_tmp = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     for (i = 0; i < 16; i ++)
@@ -86,7 +86,7 @@ matrix_t genSpace()
     matrix_t m_ret, m1;
     for (i = 0; i < 16; i++)
         for (j = 0; j < 16; j++)
-            m1.rows[i][j] = rand() / 1000000000.0;	// the const makes the rand() low enough
+            m1.rows[i][j] = rand() / 1000000000.0; // the const makes the rand() low enough
 
     // C * transpose(C)
     for (i = 0; i < 16; i++)
@@ -106,7 +106,7 @@ vecf16 genAns()
     int i;
     vecf16 v_ret;
     for (i = 0; i < 16; i++)
-        v_ret[i] = rand() / 1000000000.0;	// the const makes the rand() low enough
+        v_ret[i] = rand() / 1000000000.0; // the const makes the rand() low enough
     return v_ret;
 }
 

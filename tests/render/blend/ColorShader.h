@@ -30,13 +30,13 @@ public:
     }
 
     void shadeVertices(vecf16_t *outParams, const vecf16_t *inAttribs, const void *,
-                       int) const override
+                       vmask_t) const override
     {
         // Position
         outParams[kParamX] = inAttribs[0];
         outParams[kParamY] = inAttribs[1];
         outParams[kParamZ] = inAttribs[2];
-        outParams[kParamW] = splatf(1.0);
+        outParams[kParamW] = 1.0;
 
         // Color
         outParams[4] = inAttribs[3];
@@ -47,7 +47,7 @@ public:
 
     void shadePixels(vecf16_t *outColor, const vecf16_t *inParams,
                      const void *, const Texture * const *,
-                     unsigned short) const override
+                     vmask_t) const override
     {
         outColor[0] = inParams[0] * inParams[3];
         outColor[1] = inParams[1] * inParams[3];

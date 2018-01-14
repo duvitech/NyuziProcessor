@@ -18,7 +18,7 @@ TOPDIR=../../../
 
 include $(TOPDIR)/build/target.mk
 
-CFLAGS+=-g
+CFLAGS+=-Werror -Wno-expansion-to-defined -Wno-null-pointer-arithmetic -Wno-tautological-constant-compare
 VPATH=src
 
 SRCS=math.c \
@@ -30,23 +30,22 @@ SRCS=math.c \
 	qsort.c \
 	setjmp.s \
 	time.c \
-	vfprintf.c
+	vfprintf.c \
+	memcpy.s \
+	memset.c \
+	memcmp.c \
 
 OBJS := $(SRCS_TO_OBJS)
 DEPS := $(SRCS_TO_DEPS)
 
-all: $(OBJ_DIR) libc.a crt0.o
+all: $(OBJ_DIR) libc.a
 
 libc.a: $(OBJS) $(DEPS)
 	$(AR) r $@ $(OBJS)
 
-crt0.o: src/crt0.s
-	$(CC) -o $@ -c $<
-
 clean:
 	rm -rf $(OBJ_DIR)
 	rm -f libc.a
-	rm -f crt0.o
 
 $(OBJ_DIR): FORCE
 	mkdir -p $(OBJ_DIR)

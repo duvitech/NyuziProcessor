@@ -30,12 +30,12 @@ module logic_analyzer
     parameter CAPTURE_SIZE = 64,
     parameter BAUD_DIVIDE = 1)
 
-    (input                       clk,
-    input                         reset,
+    (input                          clk,
+    input                           reset,
     input[CAPTURE_WIDTH_BITS - 1:0] capture_data,
-    input                        capture_enable,
-    input                        trigger,
-    output                       uart_tx);
+    input                           capture_enable,
+    input                           trigger,
+    output logic                    uart_tx);
 
     localparam CAPTURE_INDEX_WIDTH = $clog2(CAPTURE_SIZE);
     localparam CAPTURE_WIDTH_BYTES = (CAPTURE_WIDTH_BITS + 7) / 8;
@@ -55,7 +55,6 @@ module logic_analyzer
     logic[7:0] tx_char;
     logic[CAPTURE_WIDTH_BITS - 1:0] dump_value;
 
-
     /*AUTOLOGIC*/
     // Beginning of automatic wires (for undeclared instantiated-module outputs)
     logic               tx_ready;               // From uart_transmit of uart_transmit.v
@@ -70,7 +69,9 @@ module logic_analyzer
         .write_addr(capture_entry),
         .write_data(capture_data));
 
-    uart_transmit #(.BAUD_DIVIDE(BAUD_DIVIDE)) uart_transmit(.*);
+    uart_transmit #(.DIVISOR_WIDTH(12)) uart_transmit(
+        .clocks_per_bit(50000000 / 921600),
+        .*);
 
     assign tx_char = dump_value[(dump_byte * 8)+:8];
 
@@ -165,10 +166,3 @@ module logic_analyzer
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-library-flags:("-y ../../core" "-y ../../testbench")
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:
-

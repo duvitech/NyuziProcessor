@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright 2011-2015 Jeff Bush
 #
@@ -15,51 +15,46 @@
 # limitations under the License.
 #
 
-import sys
-import subprocess
-import re
 import os
-from os import path
+import subprocess
+import sys
 import time
 
 sys.path.insert(0, '..')
-from test_harness import *
+import test_harness
 
 
 VERILATOR_MEM_DUMP = 'obj/vmem.bin'
 EMULATOR_MEM_DUMP = 'obj/mmem.bin'
 
-verilator_args = [
-    '../../bin/verilator_model',
-    '+trace',
-    '+simcycles=2000000',
-    '+memdumpfile=' + VERILATOR_MEM_DUMP,
-    '+memdumpbase=800000',
-    '+memdumplen=400000',
-    '+autoflushl2'
-]
 
-if 'RANDSEED' in os.environ:
-    verilator_args += ['+randseed=' + os.environ['RANDSEED']]
+def run_cosimulation_test(source_file, target):
+    verilator_args = [
+        '../../bin/verilator_model',
+        '+trace',
+        '+simcycles=2000000',
+        '+memdumpfile=' + VERILATOR_MEM_DUMP,
+        '+memdumpbase=800000',
+        '+memdumplen=400000',
+        '+autoflushl2'
+    ]
 
-emulator_args = [
-    '../../bin/emulator',
-    '-m',
-    'cosim',
-    '-d',
-    'obj/mmem.bin,0x800000,0x400000'
-]
+    # XXX this should probably be a command line option in test_harness.py
+    if 'RANDSEED' in os.environ:
+        verilator_args += ['+randseed=' + os.environ['RANDSEED']]
 
-verbose = 'VERBOSE' in os.environ
-if verbose:
-    emulator_args += ['-v']
+    emulator_args = [
+        '../../bin/emulator',
+        '-m',
+        'cosim',
+        '-d',
+        'obj/mmem.bin,0x800000,0x400000'
+    ]
 
+    if test_harness.DEBUG:
+        emulator_args += ['-v']
 
-def run_cosimulation_test(source_file):
-    global emulator_args
-    global verilator_args
-
-    hexfile = assemble_test(source_file)
+    hexfile = test_harness.build_program([source_file])
     p1 = subprocess.Popen(
         verilator_args + ['+bin=' + hexfile], stdout=subprocess.PIPE)
     p2 = subprocess.Popen(
@@ -70,22 +65,22 @@ def run_cosimulation_test(source_file):
         if not got:
             break
 
-        if verbose:
-            print(str(got))
+        if test_harness.DEBUG:
+            print(got.decode())
         else:
-            output += str(got)
+            output += got.decode()
 
     p2.wait()
     time.sleep(1)  # Give verilator a chance to clean up
     p1.kill() 	# Make sure verilator has exited
-    if p2.returncode != 0:
-        raise TestException(
+    if p2.returncode:
+        raise test_harness.TestException(
             'FAIL: cosimulation mismatch\n' + output)
 
-    assert_files_equal(VERILATOR_MEM_DUMP, EMULATOR_MEM_DUMP,
-                       'final memory contents to not match')
+    test_harness.assert_files_equal(VERILATOR_MEM_DUMP, EMULATOR_MEM_DUMP,
+                                    'final memory contents to not match')
 
-register_tests(run_cosimulation_test,
-               find_files(('.s', '.S')))
+test_harness.register_tests(run_cosimulation_test,
+                            test_harness.find_files(('.s', '.S')), ['verilator'])
 
-execute_tests()
+test_harness.execute_tests()

@@ -37,7 +37,7 @@ public:
     }
 
     void shadeVertices(vecf16_t *outParams, const vecf16_t *inAttribs, const void *_uniforms,
-                       int) const override
+                       vmask_t) const override
     {
         const DepthUniforms *uniforms = static_cast<const DepthUniforms*>(_uniforms);
 
@@ -46,7 +46,7 @@ public:
         for (int i = 0; i < 3; i++)
             coord[i] = inAttribs[i];
 
-        coord[3] = splatf(1.0f);
+        coord[3] = 1.0f;
         uniforms->fMVPMatrix.mulVec(outParams, coord);
 
         // Copy depth
@@ -55,17 +55,17 @@ public:
 
     void shadePixels(vecf16_t *outColor, const vecf16_t *inParams,
                      const void *, const Texture * const * ,
-                     unsigned short ) const override
+                     vmask_t) const override
     {
         // Scale depth value.
         // XXX this is hardcoded based on the size of the model. The last parameter
         // may need to be changed for other ones.
-        vecf16_t depthval = splatf(1.0) - ((-inParams[0] - splatf(1.0)) / splatf(20.0));
+        vecf16_t depthval = 1.0 - ((-inParams[0] - 1.0) / 20.0);
 
         outColor[kColorR] = depthval;
         outColor[kColorG] = depthval;
         outColor[kColorB] = depthval;
-        outColor[kColorA] = splatf(1.0);
+        outColor[kColorA] = 1.0;
     }
 };
 

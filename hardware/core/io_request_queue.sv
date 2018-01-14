@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // Handles non-cacheable memory operations to memory mapped registers
 // These always block the thread until the transaction is complete.
@@ -30,7 +32,7 @@ module io_request_queue
     // From dcache_data_stage
     input                                  dd_io_write_en,
     input                                  dd_io_read_en,
-    input thread_idx_t                     dd_io_thread_idx,
+    input local_thread_idx_t               dd_io_thread_idx,
     input scalar_t                         dd_io_addr,
     input scalar_t                         dd_io_write_value,
 
@@ -39,31 +41,31 @@ module io_request_queue
     output logic                           ior_rollback_en,
 
     // To instruction_decode_stage
-    output thread_bitmap_t                 ior_pending,
+    output local_thread_bitmap_t           ior_pending,
 
     // To thread_select_stage
-    output thread_bitmap_t                 ior_wake_bitmap,
-
-    // To io_interconnect
-    output logic                           ior_request_valid,
-    output ioreq_packet_t                  ior_request,
+    output local_thread_bitmap_t           ior_wake_bitmap,
 
     // From io_interconnect
     input                                  ii_ready,
     input                                  ii_response_valid,
-    input iorsp_packet_t                   ii_response);
+    input iorsp_packet_t                   ii_response,
+
+    // To io_interconnect
+    output logic                           ior_request_valid,
+    output ioreq_packet_t                  ior_request);
 
     struct packed {
         logic valid;
         logic request_sent;
-        logic is_store;
+        logic store;
         scalar_t address;
         scalar_t value;
     } pending_request[`THREADS_PER_CORE];
-    thread_bitmap_t wake_thread_oh;
-    thread_bitmap_t send_request;
-    thread_bitmap_t send_grant_oh;
-    thread_idx_t send_grant_idx;
+    local_thread_bitmap_t wake_thread_oh;
+    local_thread_bitmap_t send_request;
+    local_thread_bitmap_t send_grant_oh;
+    local_thread_idx_t send_grant_idx;
 
     genvar thread_idx;
     generate
@@ -81,7 +83,7 @@ module io_request_queue
                 else
                 begin
                     if ((dd_io_write_en | dd_io_read_en) && dd_io_thread_idx
-                        == thread_idx_t'(thread_idx))
+                        == local_thread_idx_t'(thread_idx))
                     begin
                         if (pending_request[thread_idx].valid)
                         begin
@@ -92,7 +94,7 @@ module io_request_queue
                         begin
                             // Request initiated
                             pending_request[thread_idx].valid <= 1;
-                            pending_request[thread_idx].is_store <= dd_io_write_en;
+                            pending_request[thread_idx].store <= dd_io_write_en;
                             pending_request[thread_idx].address <= dd_io_addr;
                             pending_request[thread_idx].value <= dd_io_write_value;
                             pending_request[thread_idx].request_sent <= 0;
@@ -100,7 +102,7 @@ module io_request_queue
                     end
 
                     if (ii_response_valid && ii_response.core == CORE_ID && ii_response.thread_idx
-                        == thread_idx_t'(thread_idx))
+                        == local_thread_idx_t'(thread_idx))
                     begin
                         // Ensure there isn't a response for an entry that isn't pending
                         assert(pending_request[thread_idx].valid);
@@ -108,7 +110,7 @@ module io_request_queue
                         pending_request[thread_idx].value <= ii_response.read_value;
                     end
 
-                    if (ii_ready && |send_grant_oh && send_grant_idx == thread_idx_t'(thread_idx))
+                    if (ii_ready && |send_grant_oh && send_grant_idx == local_thread_idx_t'(thread_idx))
                         pending_request[thread_idx].request_sent <= 1;
                 end
             end
@@ -130,11 +132,11 @@ module io_request_queue
         .one_hot(wake_thread_oh));
 
     assign ior_wake_bitmap = (ii_response_valid && ii_response.core == CORE_ID)
-        ? wake_thread_oh : thread_bitmap_t'(0);
+        ? wake_thread_oh : local_thread_bitmap_t'(0);
 
     // Send request
     assign ior_request_valid = |send_request;
-    assign ior_request.is_store = pending_request[send_grant_idx].is_store;
+    assign ior_request.store = pending_request[send_grant_idx].store;
     assign ior_request.address = pending_request[send_grant_idx].address;
     assign ior_request.value = pending_request[send_grant_idx].value;
     assign ior_request.thread_idx = send_grant_idx;
@@ -161,7 +163,3 @@ module io_request_queue
         ior_read_value <= pending_request[dd_io_thread_idx].value;
 endmodule
 
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

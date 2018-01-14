@@ -35,6 +35,7 @@ class Matrix
 public:
     Matrix()
     {
+        // Identity matrix
         memset(fValues, 0, sizeof(float) * 16);
         fValues[0][0] = 1.0f;
         fValues[1][1] = 1.0f;
@@ -42,7 +43,7 @@ public:
         fValues[3][3] = 1.0f;
     }
 
-    Matrix(const float values[4][4])
+    explicit Matrix(const float values[4][4])
     {
         for (int row = 0; row < 4; row++)
         {
@@ -51,16 +52,8 @@ public:
         }
     }
 
-    Matrix(const Matrix &rhs)
-    {
-        memcpy((void*) fValues, rhs.fValues, sizeof(float) * 16);
-    }
-
-    Matrix &operator=(const Matrix &rhs)
-    {
-        memcpy((void*) fValues, rhs.fValues, sizeof(float) * 16);
-        return *this;
-    }
+    Matrix(const Matrix &rhs) = default;
+    Matrix &operator=(const Matrix &rhs) = default;
 
     Matrix operator*(const Matrix &rhs) const
     {
@@ -87,31 +80,31 @@ public:
         return *this;
     }
 
-     Vec3 operator*(const Vec3 &rhs) const
-     {
-         float result[3];
-         for (int row = 0; row < 3; row++)
-         {
-             float sum = 0.0f;
-             for (int col = 0; col < 3; col++)
-                 sum += fValues[row][col] * rhs[col];
+    Vec3 operator*(const Vec3 &rhs) const
+    {
+        float result[3];
+        for (int row = 0; row < 3; row++)
+        {
+            float sum = 0.0f;
+            for (int col = 0; col < 3; col++)
+                sum += fValues[row][col] * rhs[col];
 
-             // Assume last row of vector is 1
-             sum += fValues[row][3];
-             result[row] = sum;
-         }
+            // Assume last row of vector is 1
+            sum += fValues[row][3];
+            result[row] = sum;
+        }
 
-         return Vec3(result[0], result[1], result[2]);
-     }
+        return Vec3(result[0], result[1], result[2]);
+    }
 
     // Multiply 16 Vec3s by this matrix.
     void mulVec(vecf16_t *outVec, const vecf16_t *inVec) const
     {
         for (int row = 0; row < 4; row++)
         {
-            vecf16_t sum = splatf(0.0f);
+            vecf16_t sum = 0.0f;
             for (int col = 0; col < 4; col++)
-                sum += splatf(fValues[row][col]) * inVec[col];
+                sum += fValues[row][col] * inVec[col];
 
             outVec[row] = sum;
         }
@@ -204,7 +197,8 @@ public:
         float t = 1.0f - c;
         Vec3 a = around.normalized();
 
-        const float kMat1[4][4] = {
+        const float kMat1[4][4] =
+        {
             { (t * a[0] * a[0] + c), (t * a[0] * a[1] - s * a[2]), (t * a[0] * a[1] + s * a[1]), 0.0f },
             { (t * a[0] * a[1] + s * a[2]), (t * a[1] * a[1] + c), (t * a[0] * a[2] - s * a[0]), 0.0f },
             { (t * a[0] * a[1] - s * a[1]), (t * a[1] * a[2] + s * a[0]), (t * a[2] * a[2] + c), 0.0f },
@@ -216,7 +210,8 @@ public:
 
     static Matrix getTranslationMatrix(const Vec3 &trans)
     {
-        const float kValues[4][4] = {
+        const float kValues[4][4] =
+        {
             { 1.0f, 0.0f, 0.0f, trans[0] },
             { 0.0f, 1.0f, 0.0f, trans[1] },
             { 0.0f, 0.0f, 1.0f, trans[2] },
@@ -229,7 +224,8 @@ public:
     static Matrix getProjectionMatrix(float viewPortWidth, float viewPortHeight)
     {
         const float kAspectRatio = viewPortWidth / viewPortHeight;
-        const float kProjCoeff[4][4] = {
+        const float kProjCoeff[4][4] =
+        {
             { 1.0f / kAspectRatio, 0.0, 0.0, 0.0 },
             { 0.0, 1.0, 0.0, 0.0 },
             { 0.0, 0.0, 1.0, 0 },
@@ -241,7 +237,8 @@ public:
 
     static Matrix getScaleMatrix(float scale)
     {
-        const float kValues[4][4] = {
+        const float kValues[4][4] =
+        {
             { scale, 0.0f, 0.0f, 0.0f },
             { 0.0f, scale, 0.0f, 0.0f },
             { 0.0f, 0.0f, scale, 0.0f },
@@ -257,18 +254,19 @@ public:
         Vec3 x = z.crossProduct(up).normalized();
         Vec3 y = x.crossProduct(z).normalized();
 
-        const float cameraValues[4][4] = {
+        const float rotationMatrix[4][4] =
+        {
             { x[0], x[1], x[2], 0 },
             { y[0], y[1], y[2], 0 },
             { -z[0], -z[1], -z[2], 0 },
             { 0, 0, 0, 1 }
         };
 
-        return Matrix(cameraValues) * getTranslationMatrix(-location);
+        return Matrix(rotationMatrix) * getTranslationMatrix(-location);
     }
 
 private:
     float fValues[4][4];
 };
 
-}
+} // namespace librender

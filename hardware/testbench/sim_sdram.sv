@@ -44,7 +44,7 @@ module sim_sdram
     logic[NUM_BANKS - 1:0] bank_active = 0;
     logic[NUM_BANKS - 1:0] bank_cas_delay[0:3];
     logic[ROW_ADDR_WIDTH - 1:0] bank_active_row[0:NUM_BANKS - 1];
-    logic[DATA_WIDTH - 1:0] memory[0:MEM_SIZE - 1] /*verilator public*/;
+    logic[DATA_WIDTH - 1:0] sdram_data[0:MEM_SIZE - 1] /*verilator public*/;
     logic[15:0] refresh_delay = 0;
 
     // Current burst info
@@ -103,7 +103,7 @@ module sim_sdram
     end
 
     // Bank active
-    always_ff @(posedge dram_clk)
+    always @(posedge dram_clk) // fix for multiple drivers on bank_active: initial statement not compatible with always_ff according to SystemVerilog standard
     begin
         if (cmd_precharge)
         begin
@@ -216,12 +216,12 @@ module sim_sdram
 
 
     // RAM write
-    always_ff @(posedge dram_clk)
+    always @(posedge dram_clk) // fix for multiple drivers on sdram_data -- other driver is in soc_tb
     begin
         if (burst_active && cke_ff && burst_w)
-            memory[burst_address] <= dram_dq;    // Write
+            sdram_data[burst_address] <= dram_dq;    // Write
         else if (cmd_write_burst)
-            memory[{bank_active_row[dram_ba], dram_ba, dram_addr[COL_ADDR_WIDTH - 1:0]}] <= dram_dq;    // Latch first word
+            sdram_data[{bank_active_row[dram_ba], dram_ba, dram_addr[COL_ADDR_WIDTH - 1:0]}] <= dram_dq;    // Latch first word
 
 `ifndef VERILATOR
         // Check if data is still high-z. This doesn't work on verilator, because
@@ -246,7 +246,7 @@ module sim_sdram
     end
 
     // RAM read
-    assign output_reg = memory[burst_address];
+    assign output_reg = sdram_data[burst_address];
     assign dram_dq = (burst_w || cmd_write_burst) ? {DATA_WIDTH{1'hZ}} : output_reg;
 
     // Make sure client is respecting CAS latency.
@@ -268,7 +268,7 @@ module sim_sdram
     assign burst_length = 1 << mode_register_ff[2:0];
     assign burst_interleaved = mode_register_ff[3];
     assign burst_address_offset = burst_interleaved
-        ? 8'(burst_column_address) ^ 8'(burst_count_ff)
-        : 8'(burst_column_address) + 8'(burst_count_ff);
+        ? COL_ADDR_WIDTH'(burst_column_address) ^ COL_ADDR_WIDTH'(burst_count_ff)
+        : COL_ADDR_WIDTH'(burst_column_address) + COL_ADDR_WIDTH'(burst_count_ff);
     assign burst_address = {bank_active_row[burst_bank], burst_bank, burst_address_offset};
 endmodule

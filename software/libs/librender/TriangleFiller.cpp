@@ -14,16 +14,18 @@
 // limitations under the License.
 //
 
-
+#include <assert.h>
 #include <stdio.h>
 #include "TriangleFiller.h"
 
-using namespace librender;
+namespace librender
+{
 
 TriangleFiller::TriangleFiller(RenderTarget *target)
-    : 	fTarget(target),
-        fTwoOverWidth(2.0f / target->getColorBuffer()->getWidth()),
-        fTwoOverHeight(2.0f / target->getColorBuffer()->getHeight())
+    :  fTarget(target),
+       fTwoOverWidth(2.0f / target->getColorBuffer()->getWidth()),
+       fTwoOverHeight(2.0f / target->getColorBuffer()->getHeight()),
+       fOneOverZInterpolator()
 {
 }
 
@@ -130,31 +132,31 @@ void TriangleFiller::setUpParam(float c0, float c1, float c2)
     fNumParams++;
 }
 
-void TriangleFiller::fillMasked(int left, int top, unsigned short mask)
+void TriangleFiller::fillMasked(int left, int top, vmask_t mask)
 {
     // Convert from raster to screen space coordinates.
-    vecf16_t x = fTarget->getColorBuffer()->getXStep() + splatf(left * fTwoOverWidth - 1.0f);
-    vecf16_t y = splatf(1.0f - top * fTwoOverHeight) - fTarget->getColorBuffer()->getYStep();
+    vecf16_t x = fTarget->getColorBuffer()->getXStep() + (left * fTwoOverWidth - 1.0f);
+    vecf16_t y = 1.0f - top * fTwoOverHeight - fTarget->getColorBuffer()->getYStep();
 
     // Depth buffer
     vecf16_t zValues;
     if (fNeedPerspective)
-        zValues = splatf(1.0f) / fOneOverZInterpolator.getValuesAt(x, y);
+        zValues = 1.0f / fOneOverZInterpolator.getValuesAt(x, y);
     else
-        zValues = splatf(fZ0);
+        zValues = fZ0;
 
     if (fState->fEnableDepthBuffer)
     {
-        vecf16_t depthBufferValues = static_cast<vecf16_t>(fTarget->getDepthBuffer()->readBlock(left, top));
+        vecf16_t depthBufferValues = vecf16_t(fTarget->getDepthBuffer()->readBlock(left, top));
         int passDepthTest = __builtin_nyuzi_mask_cmpf_gt(zValues, depthBufferValues);
 
         // Early Z optimization: any pixels that fail the Z test are removed
         // from the pixel mask.
         mask &= passDepthTest;
-        if (!mask)
-            return;	// All pixels are occluded
+        if (mask == 0)
+            return; // All pixels are occluded
 
-        fTarget->getDepthBuffer()->writeBlockMasked(left, top, mask, zValues);
+        fTarget->getDepthBuffer()->writeBlockMasked(left, top, mask, vecu16_t(zValues));
     }
 
     // Interpolate parameters
@@ -162,7 +164,7 @@ void TriangleFiller::fillMasked(int left, int top, unsigned short mask)
     for (int paramIndex = 0; paramIndex < fNumParams; paramIndex++)
     {
         if (fParameters[paramIndex].isConstant)
-            interpolatedParams[paramIndex] = splatf(fParameters[paramIndex].constantValue);
+            interpolatedParams[paramIndex] = fParameters[paramIndex].constantValue;
         else if (fNeedPerspective)
         {
             interpolatedParams[paramIndex] = fParameters[paramIndex].linearInterpolator
@@ -180,35 +182,55 @@ void TriangleFiller::fillMasked(int left, int top, unsigned short mask)
     fState->fShader->shadePixels(color, interpolatedParams, fState->fUniforms, fState->fTextures,
                                  mask);
 
-    // Convert color channels to 8bpp
-    veci16_t rS = __builtin_convertvector(clampfv(color[kColorR]) * splatf(255.0f), veci16_t);
-    veci16_t gS = __builtin_convertvector(clampfv(color[kColorG]) * splatf(255.0f), veci16_t);
-    veci16_t bS = __builtin_convertvector(clampfv(color[kColorB]) * splatf(255.0f), veci16_t);
 
-    veci16_t pixelValues;
+    vecu16_t pixelValues;
 
-    // If all pixels are fully opaque, don't bother trying to blend them.
-    if (fState->fEnableBlend
-            && (__builtin_nyuzi_mask_cmpf_lt(color[kColorA], splatf(1.0f)) & mask) != 0)
+    Surface *destSurface = fTarget->getColorBuffer();
+    switch (destSurface->getColorSpace())
     {
-        veci16_t aS = __builtin_convertvector(clampfv(color[kColorA]) * splatf(255.0f), veci16_t)
-                      & splati(0xff);
-        veci16_t oneMinusAS = splati(255) - aS;
+        case Surface::RGBA8888:
+        {
+            // Convert color channels to 8bpp
+            vecu16_t rS = __builtin_convertvector(clamp(color[kColorR], 0.0, 1.0) * 255.0f, vecu16_t);
+            vecu16_t gS = __builtin_convertvector(clamp(color[kColorG], 0.0, 1.0) * 255.0f, vecu16_t);
+            vecu16_t bS = __builtin_convertvector(clamp(color[kColorB], 0.0, 1.0) * 255.0f, vecu16_t);
 
-        veci16_t destColors = fTarget->getColorBuffer()->readBlock(left, top);
-        veci16_t rD = destColors & splati(0xff);
-        veci16_t gD = (destColors >> splati(8)) & splati(0xff);
-        veci16_t bD = (destColors >> splati(16)) & splati(0xff);
+            // If all pixels are fully opaque, don't bother trying to blend them.
+            if (fState->fEnableBlend
+                    && (__builtin_nyuzi_mask_cmpf_lt(color[kColorA], vecf16_t(1.0f)) & mask) != 0)
+            {
+                vecu16_t aS = __builtin_convertvector(clamp(color[kColorA], 0.0, 1.0) * 255.0f, vecu16_t)
+                              & 0xff;
+                vecu16_t oneMinusAS = 255 - aS;
 
-        // Premultiplied alpha
-        veci16_t newR = saturateuv<255>(((rS << splati(8)) + (rD * oneMinusAS)) >> splati(8));
-        veci16_t newG = saturateuv<255>(((gS << splati(8)) + (gD * oneMinusAS)) >> splati(8));
-        veci16_t newB = saturateuv<255>(((bS << splati(8)) + (bD * oneMinusAS)) >> splati(8));
-        pixelValues = splati(0xff000000) | newR | (newG << splati(8)) | (newB << splati(16));
+                vecu16_t destColors = vecu16_t(fTarget->getColorBuffer()->readBlock(left, top));
+                vecu16_t rD = destColors & 0xff;
+                vecu16_t gD = (destColors >> 8) & 0xff;
+                vecu16_t bD = (destColors >> 16) & 0xff;
+
+                // Premultiplied alpha
+                vecu16_t newR = saturate(((rS << 8) + (rD * oneMinusAS)) >> 8, 255);
+                vecu16_t newG = saturate(((gS << 8) + (gD * oneMinusAS)) >> 8, 255);
+                vecu16_t newB = saturate(((bS << 8) + (bD * oneMinusAS)) >> 8, 255);
+                pixelValues = 0xff000000 | newR | (newG << 8) | (newB << 16);
+            }
+            else
+                pixelValues = 0xff000000 | rS | (gS << 8) | (bS << 16);
+
+            break;
+        }
+
+        case Surface::FLOAT:
+            // Just store channel 0 as a floating point value. Hack?
+            pixelValues = vecu16_t(color[0]);
+            break;
+
+        default:
+            assert(0);  // Not supported yet
     }
-    else
-        pixelValues = splati(0xff000000) | rS | (gS << splati(8)) | (bS << splati(16));
 
-    fTarget->getColorBuffer()->writeBlockMasked(left, top, mask, pixelValues);
+    destSurface->writeBlockMasked(left, top, mask, vecu16_t(pixelValues));
 }
+
+} // namespace librender
 

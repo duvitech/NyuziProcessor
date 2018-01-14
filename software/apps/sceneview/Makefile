@@ -23,45 +23,52 @@ FB_WIDTH=640
 FB_HEIGHT=480
 MEMORY_SIZE=8000000
 
-CFLAGS+=-g -fno-rtti -ffast-math -std=c++11 -I$(TOPDIR)/software/libs/librender -DFB_WIDTH=$(FB_WIDTH) -DFB_HEIGHT=$(FB_HEIGHT)
-LIBS=-lrender -lc -los
+CFLAGS+=-fno-rtti -ffast-math -std=c++11 -I$(TOPDIR)/software/libs/librender -DFB_WIDTH=$(FB_WIDTH) -DFB_HEIGHT=$(FB_HEIGHT) -Werror
+LIBS=-lrender -lc -los-bare
+HEX_FILE=$(OBJ_DIR)/program.hex
 
 SRCS=sceneview.cpp
 
-OBJS := $(TOPDIR)/software/libs/libc/crt0.o $(SRCS_TO_OBJS)
+OBJS := $(CRT0_BARE) $(SRCS_TO_OBJS)
 DEPS := $(SRCS_TO_DEPS)
 
-all: $(OBJ_DIR)/program.hex fsimage.bin
+all: $(HEX_FILE) fsimage.bin
 
-$(OBJ_DIR)/program.hex: $(OBJ_DIR)/program.elf
+$(HEX_FILE): $(OBJ_DIR)/program.elf
 	$(ELF2HEX) -o $@ $<
 
 $(OBJ_DIR)/program.elf: $(DEPS) $(OBJS)
 	$(LD) -o $@ $(OBJS) $(LIBS) $(LDFLAGS)
 
+# Make disassembly file
 program.lst: $(OBJ_DIR)/program.elf FORCE
-	$(OBJDUMP) --disassemble WORK/program.elf > program.lst 2> /dev/null	# Make disassembly file
+	$(OBJDUMP) --disassemble $(OBJ_DIR)/program.elf > program.lst 2> /dev/null
 
 clean:
 	rm -rf $(OBJ_DIR)
 
 # Run in emulator
-run: $(OBJ_DIR)/program.hex fsimage.bin
+run: $(HEX_FILE) fsimage.bin
 	rm -f $(OBJ_DIR)/output.bin output.png
-	$(EMULATOR) -t 4 -c 0x$(MEMORY_SIZE) -f $(FB_WIDTH)x$(FB_HEIGHT) -b fsimage.bin $(OBJ_DIR)/program.hex
+	$(EMULATOR) -t 4 -c 0x$(MEMORY_SIZE) -f $(FB_WIDTH)x$(FB_HEIGHT) -b fsimage.bin $(HEX_FILE)
 
 # Run in emulator under debugger
-debug: $(OBJ_DIR)/program.hex fsimage.bin
-	$(EMULATOR) -m gdb -c 0x$(MEMORY_SIZE) -f $(FB_WIDTH)x$(FB_HEIGHT) -b fsimage.bin $(OBJ_DIR)/program.hex &
+debug: $(HEX_FILE) fsimage.bin
+	$(EMULATOR) -m gdb -c 0x$(MEMORY_SIZE) -f $(FB_WIDTH)x$(FB_HEIGHT) -b fsimage.bin $(HEX_FILE) &
 	$(LLDB) --arch nyuzi $(OBJ_DIR)/program.elf -o "gdb-remote 8000"
 
-verirun: $(OBJ_DIR)/program.hex
+verirun: $(HEX_FILE)
 	@rm -f $(OBJ_DIR)/output.bin output.png
-	$(VERILATOR) +memdumpfile=$(OBJ_DIR)/output.bin +memdumpbase=200000 +memdumplen=12C000 +bin=$(OBJ_DIR)/program.hex +block=fsimage.bin
+	$(VERILATOR) +memdumpfile=$(OBJ_DIR)/output.bin +memdumpbase=200000 +memdumplen=12C000 +bin=$(HEX_FILE) +block=fsimage.bin
 	@convert -depth 8 -size 640x480 rgba:$(OBJ_DIR)/output.bin output.png
 
-fpgarun: $(OBJ_DIR)/program.hex
-	$(SERIAL_BOOT) $(SERIAL_PORT) $(OBJ_DIR)/program.hex fsimage.bin
+vcsrun: $(HEX_FILE)
+	@rm -f $(OBJ_DIR)/output.bin output.png
+	$(VCSRUN) +memdumpfile=$(OBJ_DIR)/output.bin +memdumpbase=200000 +memdumplen=12C000 +bin=$(HEX_FILE) +block=fsimage.bin
+	@convert -depth 8 -size 640x480 rgba:$(OBJ_DIR)/output.bin output.png
+
+fpgarun: $(HEX_FILE)
+	$(SERIAL_BOOT) $(SERIAL_PORT) $(HEX_FILE) fsimage.bin
 
 fsimage.bin:
 	./make_resource_file.py $(MODEL_FILE)

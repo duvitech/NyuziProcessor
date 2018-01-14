@@ -14,6 +14,10 @@
 // limitations under the License.
 //
 
+`include "defines.sv"
+
+import defines::*;
+
 //
 // Drive VGA display.  This is an AXI master that DMAs color
 // data from a memory framebuffer and sends it to an ADV7123 VGA
@@ -27,6 +31,7 @@ module vga_controller
 
     // I/O bus control register access
     io_bus_interface.slave      io_bus,
+    output logic                frame_interrupt,
 
     // DMA access to memory
     axi4_interface.master       axi_bus,
@@ -35,11 +40,11 @@ module vga_controller
     output [7:0]                vga_r,
     output [7:0]                vga_g,
     output [7:0]                vga_b,
-    output                      vga_clk,
-    output                      vga_blank_n,
-    output                      vga_hs,
-    output                      vga_vs,
-    output                      vga_sync_n);
+    output logic                vga_clk,
+    output logic                vga_blank_n,
+    output logic                vga_hs,
+    output logic                vga_vs,
+    output logic                vga_sync_n);
 
     // The burst length is twice that of a CPU cache line fill to ensure
     // sufficient memory bandwidth even when ping-ponging.
@@ -57,7 +62,7 @@ module vga_controller
     // Beginning of automatic wires (for undeclared instantiated-module outputs)
     logic               in_visible_region;      // From vga_sequencer of vga_sequencer.v
     logic               pixel_en;               // From vga_sequencer of vga_sequencer.v
-    logic               start_dma;              // From vga_sequencer of vga_sequencer.v
+    logic               start_frame;            // From vga_sequencer of vga_sequencer.v
     // End of automatics
     logic[31:0] vram_addr;
     logic[7:0] _ignore_alpha;
@@ -70,6 +75,7 @@ module vga_controller
     logic[18:0] pixel_count;
     logic sequencer_en;
 
+    assign frame_interrupt = start_frame;
     assign vga_blank_n = in_visible_region;
     assign vga_sync_n = 1'b0;    // Not used
     assign vga_clk = pixel_en;    // This is a bid odd: using enable as external clock.
@@ -84,7 +90,7 @@ module vga_controller
         .ALMOST_EMPTY_THRESHOLD(PIXEL_FIFO_LENGTH - BURST_LENGTH - 1)) pixel_fifo(
         .clk(clk),
         .reset(reset),
-        .flush_en(start_dma),
+        .flush_en(start_frame),
         .almost_full(),
         .empty(pixel_fifo_empty),
         .almost_empty(pixel_fifo_almost_empty),
@@ -119,7 +125,7 @@ module vga_controller
                 // simultaneously clear the FIFO and start the first DMA transaction.
                 STATE_WAIT_FRAME_START:
                 begin
-                    if (start_dma && sequencer_en)
+                    if (start_frame && sequencer_en)
                     begin
                         // Ensure there is no data left in the FIFO (which
                         // would imply we fetched too much)
@@ -227,9 +233,3 @@ module vga_controller
         .prog_data(io_bus.write_data),
         .*);
 endmodule
-
-// Local Variables:
-// verilog-library-flags:("-y ../../core" "-y ../../testbench")
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

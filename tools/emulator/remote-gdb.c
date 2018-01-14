@@ -25,137 +25,138 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include "core.h"
+#include "processor.h"
 #include "fbwindow.h"
+#include "remote-gdb.h"
 #include "util.h"
+
+#define LOG_COMMANDS 0
 
 #define TRAP_SIGNAL 5 // SIGTRAP
 
-extern void remoteGdbMainLoop(Core*, int enableFbWindow);
-extern void checkInterruptPipe(Core*);
-static void sendFormattedResponse(const char *format, ...)  __attribute__ ((format (printf, 1, 2)));
+extern void check_interrupt_pipe(struct processor*);
+static void __attribute__ ((format (printf, 1, 2))) send_formatted_response(const char *format, ...);
 
-static Core *gCore;
-static int gClientSocket = -1;
-static int *gLastSignals;
+static int client_socket = -1;
+static int *last_signals;
+static const char *GENERIC_REGS[] = { "fp", "sp", "ra" };
 
-static int readByte(void)
+static int read_byte(void)
 {
     uint8_t ch;
-    if (read(gClientSocket, &ch, 1) < 1)
+    if (read(client_socket, &ch, 1) < 1)
     {
-        perror("readByte: error reading from debug socket");
+        perror("read_byte: error reading from debug socket");
         return -1;
     }
 
     return (int) ch;
 }
 
-static int readPacket(char *request, int maxLength)
+static int read_packet(char *request, int max_length)
 {
     int ch;
-    int packetLen;
+    int packet_len;
 
     // Wait for packet start
     do
     {
-        ch = readByte();
+        ch = read_byte();
         if (ch < 0)
             return -1;
     }
     while (ch != '$');
 
     // Read body
-    packetLen = 0;
+    packet_len = 0;
     while (true)
     {
-        ch = readByte();
+        ch = read_byte();
         if (ch < 0)
             return -1;
 
         if (ch == '#')
             break;
 
-        if (packetLen < maxLength)
-            request[packetLen++] = (char) ch;
+        if (packet_len < max_length)
+            request[packet_len++] = (char) ch;
     }
 
     // Read checksum and discard
-    readByte();
-    readByte();
+    read_byte();
+    read_byte();
 
-    request[packetLen] = '\0';
-    return packetLen;
+    request[packet_len] = '\0';
+
+#if LOG_COMMANDS
+    printf("GDB recv: %s\n", request);
+#endif
+
+    return packet_len;
 }
 
-static const char *kGenericRegs[] =
-{
-    "fp",
-    "sp",
-    "ra",
-    "pc"
-};
-
-static void sendResponsePacket(const char *request)
+static void send_response_packet(const char *response)
 {
     uint8_t checksum;
-    char checksumChars[16];
+    char checksum_chars[16];
     int i;
-    size_t requestLength = strlen(request);
+    size_t response_length = strlen(response);
 
-    if (write(gClientSocket, "$", 1) < 1
-            || write(gClientSocket, request, requestLength) < (ssize_t) requestLength
-            || write(gClientSocket, "#", 1) < 1)
+#if LOG_COMMANDS
+    printf("GDB send: %s\n", response);
+#endif
+
+    if (write(client_socket, "$", 1) < 1
+            || write(client_socket, response, response_length) < (ssize_t) response_length
+            || write(client_socket, "#", 1) < 1)
     {
-        perror("sendResponsePacket: Error writing to debugger socket");
+        perror("send_response_packet: Error writing to debugger socket");
         exit(1);
     }
 
     checksum = 0;
-    for (i = 0; request[i]; i++)
-        checksum += request[i];
+    for (i = 0; response[i]; i++)
+        checksum += response[i];
 
-    sprintf(checksumChars, "%02x", checksum);
-    if (write(gClientSocket, checksumChars, 2) < 2)
+    sprintf(checksum_chars, "%02x", checksum);
+    if (write(client_socket, checksum_chars, 2) < 2)
     {
-        perror("sendResponsePacket: Error writing to debugger socket");
+        perror("send_response_packet: Error writing to debugger socket");
         exit(1);
     }
 }
 
-static void sendFormattedResponse(const char *format, ...)
+static void send_formatted_response(const char *format, ...)
 {
     char buf[256];
     va_list args;
     va_start(args, format);
     vsnprintf(buf, sizeof(buf) - 1, format, args);
     va_end(args);
-    sendResponsePacket(buf);
+    send_response_packet(buf);
 }
 
-// threadId of ALL_THREADS means run all threads.  Otherwise, run just the
-// indicated thread.
-static void runUntilInterrupt(Core *core, uint32_t threadId, bool enableFbWindow)
+static void run_until_interrupt(struct processor *proc, bool enable_fb_window)
 {
     while (true)
     {
-        if (!executeInstructions(core, threadId, gScreenRefreshRate))
+        if (!execute_instructions(proc, screen_refresh_rate))
             break;
 
-        if (enableFbWindow)
+        if (enable_fb_window)
         {
-            updateFramebuffer(core);
-            pollFbWindowEvent();
-            checkInterruptPipe(core);
+            update_frame_buffer(proc);
+            poll_fb_window_event();
+            check_interrupt_pipe(proc);
         }
 
         // Break on error or if data is ready
-        if (canReadFileDescriptor(gClientSocket) != 0)
+        if (can_read_file_descriptor(client_socket))
             break;
     }
 }
 
-static uint8_t decodeHexByte(const char *ptr)
+static uint8_t decode_hex_byte(const char *ptr)
 {
     int i;
     int retval = 0;
@@ -175,50 +176,49 @@ static uint8_t decodeHexByte(const char *ptr)
     return (uint8_t) retval;
 }
 
-void remoteGdbMainLoop(Core *core, int enableFbWindow)
+void remote_gdb_main_loop(struct processor *proc, bool enable_fb_window)
 {
-    int listenSocket;
+    int listen_socket;
     struct sockaddr_in address;
-    socklen_t addressLength;
+    socklen_t address_length;
     int got;
     char request[256];
     uint32_t i;
-    bool noAckMode = false;
+    bool no_ack_mode = false;
     int optval;
-    char response[256];
-    uint32_t currentThread = 0;
+    char response[1024];
+    uint32_t current_thread = 0;
 
-    gCore = core;
-    gLastSignals = calloc(sizeof(int), getTotalThreads(core));
-    for (i = 0; i < getTotalThreads(core); i++)
-        gLastSignals[i] = 0;
+    last_signals = calloc(sizeof(int), get_total_threads(proc));
+    for (i = 0; i < get_total_threads(proc); i++)
+        last_signals[i] = 0;
 
-    listenSocket = socket(PF_INET, SOCK_STREAM, 0);
-    if (listenSocket < 0)
+    listen_socket = socket(PF_INET, SOCK_STREAM, 0);
+    if (listen_socket < 0)
     {
-        perror("remoteGdbMainLoop: error setting up debug socket (socket)");
+        perror("remote_gdb_main_loop: error setting up debug socket (socket)");
         return;
     }
 
     optval = 1;
-    if (setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0)
+    if (setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) < 0)
     {
-        perror("remoteGdbMainLoop: error setting up debug socket (setsockopt)");
+        perror("remote_gdb_main_loop: error setting up debug socket (setsockopt)");
         return;
     }
 
     address.sin_family = AF_INET;
     address.sin_port = htons(8000);
     address.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(listenSocket, (struct sockaddr*) &address, sizeof(address)) < 0)
+    if (bind(listen_socket, (struct sockaddr*) &address, sizeof(address)) < 0)
     {
-        perror("remoteGdbMainLoop: error setting up debug socket (bind)");
+        perror("remote_gdb_main_loop: error setting up debug socket (bind)");
         return;
     }
 
-    if (listen(listenSocket, 1) < 0)
+    if (listen(listen_socket, 1) < 0)
     {
-        perror("remoteGdbMainLoop: error setting up debug socket (listen)");
+        perror("remote_gdb_main_loop: error setting up debug socket (listen)");
         return;
     }
 
@@ -227,27 +227,27 @@ void remoteGdbMainLoop(Core *core, int enableFbWindow)
         // Wait for a new client socket
         while (true)
         {
-            addressLength = sizeof(address);
-            gClientSocket = accept(listenSocket, (struct sockaddr*) &address,
-                                   &addressLength);
-            if (gClientSocket >= 0)
+            address_length = sizeof(address);
+            client_socket = accept(listen_socket, (struct sockaddr*) &address,
+                                   &address_length);
+            if (client_socket >= 0)
                 break;
         }
 
-        noAckMode = false;
+        no_ack_mode = false;
 
         // Process commands
         while (true)
         {
-            got = readPacket(request, sizeof(request));
+            got = read_packet(request, sizeof(request));
             if (got < 0)
                 break;
 
-            if (!noAckMode)
+            if (!no_ack_mode)
             {
-                if (write(gClientSocket, "+", 1) != 1)
+                if (write(client_socket, "+", 1) != 1)
                 {
-                    perror("remoteGdbMainLoop: Error writing to debug socket");
+                    perror("remote_gdb_main_loop: Error writing to debug socket");
                     exit(1);
                 }
             }
@@ -257,30 +257,38 @@ void remoteGdbMainLoop(Core *core, int enableFbWindow)
                 // Set arguments
                 case 'A':
                     // Doesn't support setting program arguments, so just silently ignore.
-                    sendResponsePacket("OK");
+                    send_response_packet("OK");
                     break;
 
                 // Continue
                 case 'c':
                 case 'C':
-                    runUntilInterrupt(core, ALL_THREADS, enableFbWindow);
-                    gLastSignals[currentThread] = TRAP_SIGNAL;
-                    sendFormattedResponse("S%02x", gLastSignals[currentThread]);
+                    run_until_interrupt(proc, enable_fb_window);
+                    last_signals[current_thread] = TRAP_SIGNAL;
+                    send_formatted_response("S%02x", last_signals[current_thread]);
                     break;
 
                 // Pick thread
                 case 'H':
-                    if (request[1] == 'g' || request[1] == 'c')
-                    {
-                        // XXX hack: the request type controls which operations this
-                        // applies for.
-                        currentThread = (uint32_t)(request[2] - '1');
-                        sendResponsePacket("OK");
-                    }
-                    else
-                        sendResponsePacket("");
+                {
+                    uint32_t thid;
 
+                    // XXX hack: the request type (request[1] controls which
+                    // operations this applies for. I ignore it.
+
+                    // Thread indices in GDB start at 1, but current_thread
+                    // is zero based.
+                    thid = (uint32_t) strtoul(request + 2, NULL, 16);
+                    if (thid > get_total_threads(proc) || thid == 0)
+                    {
+                        send_response_packet("");
+                        break;
+                    }
+
+                    current_thread = thid - 1;
+                    send_response_packet("OK");
                     break;
+                }
 
                 // Kill
                 case 'k':
@@ -290,30 +298,37 @@ void remoteGdbMainLoop(Core *core, int enableFbWindow)
                 case 'm':
                 case 'M':
                 {
-                    char *lenPtr;
-                    char *dataPtr;
+                    char *len_ptr;
+                    char *data_ptr;
                     uint32_t start;
                     uint32_t length;
                     uint32_t offset;
 
-                    start = (uint32_t) strtoul(request + 1, &lenPtr, 16);
-                    length = (uint32_t) strtoul(lenPtr + 1, &dataPtr, 16);
+                    start = (uint32_t) strtoul(request + 1, &len_ptr, 16);
+                    length = (uint32_t) strtoul(len_ptr + 1, &data_ptr, 16);
                     if (request[0] == 'm')
                     {
+                        // XXX May need dynamic allocation. At very least, buffer is too small.
+                        if (length > sizeof(response) / 2)
+                        {
+                            printf("memory read of %d requested\n", length);
+                            assert(0);
+                        }
+
                         // Read memory
                         for (offset = 0; offset < length; offset++)
-                            sprintf(response + offset * 2, "%02x", debugReadMemoryByte(core, start + offset));
+                            sprintf(response + offset * 2, "%02x", dbg_read_memory_byte(proc, start + offset));
 
-                        sendResponsePacket(response);
+                        send_response_packet(response);
                     }
                     else
                     {
                         // Write memory
-                        dataPtr += 1;	// Skip colon
+                        data_ptr += 1;	// Skip colon
                         for (offset = 0; offset < length; offset++)
-                            debugWriteMemoryByte(core, start + offset, decodeHexByte(dataPtr + offset * 2));
+                            dbg_write_memory_byte(proc, start + offset, decode_hex_byte(data_ptr + offset * 2));
 
-                        sendResponsePacket("OK");
+                        send_response_packet("OK");
                     }
 
                     break;
@@ -323,72 +338,127 @@ void remoteGdbMainLoop(Core *core, int enableFbWindow)
                 case 'p':
                 case 'g':
                 {
-                    uint32_t regId = (uint32_t) strtoul(request + 1, NULL, 16);
+                    uint32_t reg_id = (uint32_t) strtoul(request + 1, NULL, 16);
                     uint32_t value;
-                    if (regId < 32)
+                    if (reg_id < 32)
                     {
-                        value = getScalarRegister(core, currentThread, regId);
-                        sendFormattedResponse("%08x", endianSwap32(value));
+                        // Scalar register
+                        value = dbg_get_scalar_reg(proc, current_thread, reg_id);
+                        send_formatted_response("%08x", endian_swap32(value));
                     }
-                    else if (regId < 64)
+                    else if (reg_id < 64)
                     {
-                        uint32_t lane;
+                        // Vector register
+                        int lane_idx;
+                        uint32_t values[NUM_VECTOR_LANES];
 
-                        for (lane = 0; lane < NUM_VECTOR_LANES; lane++)
+                        dbg_get_vector_reg(proc, current_thread, reg_id - 32, values);
+                        for (lane_idx = 0; lane_idx < NUM_VECTOR_LANES; lane_idx++)
                         {
-                            value = getVectorRegister(core, currentThread, regId, lane);
-                            sprintf(response + lane * 8, "%08x", endianSwap32(value));
+                            sprintf(response + lane_idx * 8, "%08x",
+                                endian_swap32(values[lane_idx]));
                         }
 
-                        sendResponsePacket(response);
+                        send_response_packet(response);
+                    }
+                    else if (reg_id == 64)
+                    {
+                        // program counter
+                        value = dbg_get_pc(proc, current_thread);
+                        send_formatted_response("%08x", endian_swap32(value));
                     }
                     else
-                        sendResponsePacket("");
+                        send_response_packet("");
 
                     break;
                 }
 
-                // XXX need to implement write register
+                // Write register
+                case 'G':
+                {
+                    char *data_ptr;
+                    uint32_t reg_id = (uint32_t) strtoul(request + 1, &data_ptr, 16);
+
+                    if (reg_id < 32)
+                    {
+                        // Scalar register
+                        uint32_t reg_value = (uint32_t) strtoul(data_ptr + 1, NULL, 16);
+                        dbg_set_scalar_reg(proc, current_thread, reg_id, endian_swap32(reg_value));
+                        send_response_packet("OK");
+                    }
+                    else if (reg_id < 64)
+                    {
+                        // Vector register
+                        uint32_t reg_value[NUM_VECTOR_LANES];
+
+                        if (parse_hex_vector(data_ptr + 1, reg_value, true) < 0)
+                            send_response_packet("");
+                        else
+                        {
+                            dbg_set_vector_reg(proc, current_thread, reg_id - 32, reg_value);
+                            send_response_packet("OK");
+                        }
+                    }
+                    else
+                        send_response_packet("");
+
+                    break;
+                }
 
                 // Query
                 case 'q':
                     if (strcmp(request + 1, "LaunchSuccess") == 0)
-                        sendResponsePacket("OK");
+                        send_response_packet("OK");
                     else if (strcmp(request + 1, "HostInfo") == 0)
-                        sendResponsePacket("triple:nyuzi;endian:little;ptrsize:4");
+                        send_response_packet("triple:nyuzi;endian:little;ptrsize:4");
                     else if (strcmp(request + 1, "ProcessInfo") == 0)
-                        sendResponsePacket("pid:1");
+                        send_response_packet("pid:1");
                     else if (strcmp(request + 1, "fThreadInfo") == 0)
-                        sendResponsePacket("m1,2,3,4");	// XXX need to query number of threads
+                    {
+                        uint32_t num_threads = get_total_threads(proc);
+                        int offset = 2;
+
+                        strcpy(response, "m1");
+                        for (i = 2; i <= num_threads && offset < (int) sizeof(response); i++)
+                        {
+                            offset += snprintf(response + offset, sizeof(response)
+                                               - (size_t) offset, ",%d", i);
+                        }
+
+                        send_response_packet(response);
+                    }
                     else if (strcmp(request + 1, "sThreadInfo") == 0)
-                        sendResponsePacket("l");
+                        send_response_packet("l");
                     else if (memcmp(request + 1, "ThreadStopInfo", 14) == 0)
-                        sprintf(response, "S%02x", gLastSignals[currentThread]);
+                        send_formatted_response("S%02x", last_signals[current_thread]);
                     else if (memcmp(request + 1, "RegisterInfo", 12) == 0)
                     {
-                        uint32_t regId = (uint32_t) strtoul(request + 13, NULL, 16);
-                        if (regId < 32)
+                        uint32_t reg_id = (uint32_t) strtoul(request + 13, NULL, 16);
+                        if (reg_id < 32 || reg_id == 64)
                         {
                             sprintf(response, "name:s%d;bitsize:32;encoding:uint;format:hex;set:General Purpose Scalar Registers;gcc:%d;dwarf:%d;",
-                                    regId, regId, regId);
+                                    reg_id, reg_id, reg_id);
 
-                            if (regId >= 28)
-                                sprintf(response + strlen(response), "generic:%s;", kGenericRegs[regId - 28]);
+                            if (reg_id == 64)
+                                sprintf(response + strlen(response), "generic:pc;");
+                            else if (reg_id >= 29)
+                                sprintf(response + strlen(response), "generic:%s;", GENERIC_REGS[reg_id - 29]);
+
+                            send_response_packet(response);
                         }
-                        else if (regId < 64)
+                        else if (reg_id < 64)
                         {
-                            sprintf(response, "name:v%d;bitsize:512;encoding:uint;format:vector-uint32;set:General Purpose Vector Registers;gcc:%d;dwarf:%d;",
-                                    regId - 32, regId, regId);
+                            send_formatted_response("name:v%d;bitsize:512;encoding:uint;format:vector-uint32;set:General Purpose Vector Registers;gcc:%d;dwarf:%d;",
+                                                    reg_id - 32, reg_id, reg_id);
                         }
                         else
-                            strcpy(response, "");
+                            send_response_packet("");
 
-                        sendResponsePacket(response);
                     }
                     else if (strcmp(request + 1, "C") == 0)
-                        sendFormattedResponse("QC%02x", currentThread + 1);
+                        send_formatted_response("QC%02x", current_thread + 1);
                     else
-                        sendResponsePacket("");	// Not supported
+                        send_response_packet("");	// Not supported
 
                     break;
 
@@ -396,26 +466,26 @@ void remoteGdbMainLoop(Core *core, int enableFbWindow)
                 case 'Q':
                     if (strcmp(request + 1, "StartNoAckMode") == 0)
                     {
-                        noAckMode = true;
-                        sendResponsePacket("OK");
+                        no_ack_mode = true;
+                        send_response_packet("OK");
                     }
                     else
-                        sendResponsePacket("");	// Not supported
+                        send_response_packet("");	// Not supported
 
                     break;
 
                 // Single step
                 case 's':
                 case 'S':
-                    singleStep(core, currentThread);
-                    gLastSignals[currentThread] = TRAP_SIGNAL;
-                    sendFormattedResponse("S%02x", gLastSignals[currentThread]);
+                    dbg_single_step(proc, current_thread);
+                    last_signals[current_thread] = TRAP_SIGNAL;
+                    send_formatted_response("S%02x", last_signals[current_thread]);
                     break;
 
                 // Multi-character command
                 case 'v':
                     if (strcmp(request, "vCont?") == 0)
-                        sendResponsePacket("vCont;C;c;S;s");
+                        send_response_packet("vCont;C;c;S;s");
                     else if (memcmp(request, "vCont;", 6) == 0)
                     {
                         // XXX hack.  There are two things lldb requests.  One is
@@ -426,54 +496,53 @@ void remoteGdbMainLoop(Core *core, int enableFbWindow)
                         if (sreq != NULL)
                         {
                             // s:0001
-                            currentThread = (uint32_t) strtoul(sreq + 2, NULL, 16) - 1;
-                            singleStep(core, currentThread);
-                            gLastSignals[currentThread] = TRAP_SIGNAL;
-                            sendFormattedResponse("S%02x", gLastSignals[currentThread]);
+                            current_thread = (uint32_t) strtoul(sreq + 2, NULL, 16) - 1;
+                            dbg_single_step(proc, current_thread);
+                            last_signals[current_thread] = TRAP_SIGNAL;
+                            send_formatted_response("S%02x", last_signals[current_thread]);
                         }
                         else
                         {
-                            runUntilInterrupt(core, ALL_THREADS, enableFbWindow);
-                            gLastSignals[currentThread] = TRAP_SIGNAL;
-                            sendFormattedResponse("S%02x", gLastSignals[currentThread]);
+                            run_until_interrupt(proc, enable_fb_window);
+                            last_signals[current_thread] = TRAP_SIGNAL;
+                            send_formatted_response("S%02x", last_signals[current_thread]);
                         }
                     }
                     else
-                        sendResponsePacket("");
+                        send_response_packet("");
 
                     break;
 
                 // Clear breakpoint
                 case 'z':
-                    if (clearBreakpoint(core, (uint32_t) strtoul(request + 3, NULL, 16)) < 0)
-                        sendResponsePacket(""); // Error
+                    if (dbg_clear_breakpoint(proc, (uint32_t) strtoul(request + 3, NULL, 16)) < 0)
+                        send_response_packet(""); // Error
                     else
-                        sendResponsePacket("OK");
+                        send_response_packet("OK");
 
                     break;
 
                 // Set breakpoint
                 case 'Z':
-                    if (setBreakpoint(core, (uint32_t) strtoul(request + 3, NULL, 16)) < 0)
-                        sendResponsePacket(""); // Error
+                    if (dbg_set_breakpoint(proc, (uint32_t) strtoul(request + 3, NULL, 16)) < 0)
+                        send_response_packet(""); // Error
                     else
-                        sendResponsePacket("OK");
+                        send_response_packet("OK");
 
                     break;
 
                 // Get last signal
                 case '?':
-                    sprintf(response, "S%02x", gLastSignals[currentThread]);
-                    sendResponsePacket(response);
+                    send_formatted_response("S%02x", last_signals[current_thread]);
                     break;
 
                 // Unknown, return error
                 default:
-                    sendResponsePacket("");
+                    send_response_packet("");
             }
         }
 
-        close(gClientSocket);
+        close(client_socket);
     }
 }
 

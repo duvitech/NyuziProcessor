@@ -28,7 +28,8 @@ output and a mass storage device.
 | -f   |  widthxheight             | Display framebuffer output in window             |
 | -d   |  filename,start,length    | Dump memory                                      |
 | -b   |  filename                 | Load file into virtual block device              |
-| -t   |  num                      | Total threads (default 4)                        |
+| -t   |  num                      | Threads per core (default 4)                     |
+| -p   |  num                      | Number of cores (default 1)                      |
 | -c   |  size                     | Total amount of memory                           |
 | -r   |  instructions             | Screen refresh rate, number of instructions to execute between screen updates |
 | -s   |  filename                 | Create the file and map emulated system memory onto it as a shared memory object |
@@ -50,8 +51,8 @@ Other notes:
   control registers)
 - Uncommenting the line `CFLAGS += -DLOG_INSTRUCTIONS=1` in the Makefile
   causes it to dump instruction statistics.
-- See hardware/README.md for list of device registers supported. The emulator doesn't
-  support the following devices:
+- See [SOC-Test-Environment](https://github.com/jbush001/NyuziProcessor/wiki/SOC-Test-Environment)
+  for list of supported device registers. The emulator doesn't support the following devices:
   * LED/HEX display output registers
   * Serial reads
   * VGA frame buffer address/toggle
@@ -75,15 +76,18 @@ The steps to run the debugger manually are:
         /usr/local/llvm-nyuzi/bin/lldb --arch nyuzi <program>.elf -o "gdb-remote 8000"
 
 Other notes:
-- This is new and still has bugs and missing functionality.
-- Does not support writing memory (or operations that require it)
 - The emulator does not support the debugger in cosimulation mode.
 - Debugging works better if you compile the program with optimizations disabled.
   For example, at -O3, lldb cannot read variables if they are not live at the
   execution point.
-- Debugger only currently works with four threads enabled. There are a few hardcoded assumptions
-  of four threads in remote-gdb.c.
 - The debugger does not work with virtual memory enabled.
+
+It should be possible to use any GUI debugger that works with the GDB/MI
+protocol, such as [Eclipse](https://eclipse.org/) or Emacs using the
+lldb-mi executable that is installed with the toolchain, but I have not
+tested this. There are some instructions
+[here](https://www.codeplay.com/portal/lldb-mi-driver---part-2-setting-up-the-driver),
+which would need to be adapted to this environment.
 
 ### Tracing
 
@@ -97,7 +101,7 @@ This dumps every memory and register transfer to the console.
 Many test programs have a target to build the list file, but you can create
 one like this:
 
-    /usr/local/llvm-nyuzi/bin/llvm-objdump --disassemble program.elf > program.lst 2> /dev/null
+    /usr/local/llvm-nyuzi/bin/llvm-objdump -d -S program.elf > program.lst 2> /dev/null
 
 You can correlate the trace...
 
@@ -116,7 +120,7 @@ You can correlate the trace...
     f42c:    1d 20 14 82                                      store_8 s0, 1288(sp)
     f430:    60 03 00 ac                                      getcr s27, 0
     f434:    5b 03 80 08                                      setne_i s26, s27, 0
-    f438:    1a 02 00 f4                                      btrue s26, main+772
+    f438:    1a 02 00 f4                                      bnz s26, main+772
     f43c:    1f b0 ef a9                                      load_32 s0, -1044(pc)
     ```
 

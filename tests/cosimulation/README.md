@@ -26,11 +26,11 @@ These tests only work in single-core configurations.
 To debug problems, it is often desirable to see the instructions. llvm-objdump
 can generate a listing file like this:
 
-    usr/local/llvm-nyuzi/bin/llvm-objdump --disassemble WORK/test.elf > test.dis
+    usr/local/llvm-nyuzi/bin/llvm-objdump --disassemble obj/test.elf > test.dis
 
-The program will print all events if you set the VERBOSE environment variable:
+The --debug flag will print all events
 
-    VERBOSE=1 ./runtest.py ...
+    ./runtest.py --debug ...
 
 For example:
 
@@ -145,6 +145,7 @@ compares the side effect of the instruction with the result from the Verilog
 simulator and flags an error if there is a mismatch.
 
 ### Limitations
+
 - The emulator does not model the behavior of the store buffer. As the store
   buffer affects visibility of writes to other threads, this means the emulator
   can't accurately model reads/writes to the same cache lines from multiple
@@ -162,3 +163,7 @@ simulator and flags an error if there is a mismatch.
 - If control register 13 (subcycle) is read after an interrupt, it may not match the
   value in hardware, since hardware does not log scatter stores to lanes that don't
   have the mask bit set.
+- This does not validate virtual memory translation. This has a software managed
+TLB, and the TLB replacement behavior is timing specific, which makes it hard to match
+behavior exactly.
+

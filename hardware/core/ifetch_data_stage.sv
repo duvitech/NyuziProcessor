@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // Instruction Pipeline - Instruction Fetch Data Stage
 // - If PC selected in the ifetch_tag_stage is in the instruction cache, reads
@@ -34,7 +36,7 @@ module ifetch_data_stage(
     input                            ift_instruction_requested,
     input l1i_addr_t                 ift_pc_paddr,
     input scalar_t                   ift_pc_vaddr,
-    input thread_idx_t               ift_thread_idx,
+    input local_thread_idx_t         ift_thread_idx,
     input                            ift_tlb_hit,
     input                            ift_tlb_present,
     input                            ift_tlb_executable,
@@ -59,7 +61,7 @@ module ifetch_data_stage(
     // To l1_l2_interface
     output logic                     ifd_cache_miss,
     output cache_line_index_t        ifd_cache_miss_paddr,
-    output thread_idx_t              ifd_cache_miss_thread_idx,    // also to ifetch_tag
+    output local_thread_idx_t        ifd_cache_miss_thread_idx,    // also to ifetch_tag
 
     // From control registers
     input logic                      cr_supervisor_en[`THREADS_PER_CORE],
@@ -68,30 +70,44 @@ module ifetch_data_stage(
     output scalar_t                  ifd_instruction,
     output logic                     ifd_instruction_valid,
     output scalar_t                  ifd_pc,
-    output thread_idx_t              ifd_thread_idx,
+    output local_thread_idx_t        ifd_thread_idx,
     output logic                     ifd_alignment_fault,
     output logic                     ifd_tlb_miss,
     output logic                     ifd_supervisor_fault,
     output logic                     ifd_page_fault,
     output logic                     ifd_executable_fault,
+    output logic                     ifd_inst_injected,
 
     // From writeback_stage
     input                            wb_rollback_en,
-    input thread_idx_t               wb_rollback_thread_idx,
+    input local_thread_idx_t         wb_rollback_thread_idx,
 
-    // Performance events
-    output logic                     perf_icache_hit,
-    output logic                     perf_icache_miss,
-    output logic                     perf_itlb_miss);
+    // To performance_counters
+    output logic                     ifd_perf_icache_hit,
+    output logic                     ifd_perf_icache_miss,
+    output logic                     ifd_perf_itlb_miss,
+
+    // from core
+    input                            core_selected_debug,
+
+    // From debug_controller
+    input                            ocd_halt,
+    input scalar_t                   ocd_inject_inst,
+    input logic                      ocd_inject_en,
+    input local_thread_idx_t         ocd_thread);
 
     logic cache_hit;
     logic[`L1I_WAYS - 1:0] way_hit_oh;
     l1i_way_idx_t way_hit_idx;
-    logic[`CACHE_LINE_BITS - 1:0] fetched_cache_line;
+    logic[CACHE_LINE_BITS - 1:0] fetched_cache_line;
     scalar_t fetched_word;
-    logic[$clog2(`CACHE_LINE_WORDS) - 1:0] cache_lane_idx;
+    logic[$clog2(CACHE_LINE_WORDS) - 1:0] cache_lane_idx;
     logic alignment_fault;
-    logic rollback_this_stage;
+    logic squash_instruction;
+    logic ocd_halt_latched;
+
+    assign squash_instruction = wb_rollback_en && wb_rollback_thread_idx
+        == ift_thread_idx;
 
     //
     // Check for cache hit
@@ -127,19 +143,17 @@ module ifetch_data_stage(
     assign ifd_cache_miss = !cache_hit
         && ift_tlb_hit
         && ift_instruction_requested
-        && !ifd_near_miss;
+        && !ifd_near_miss
+        && !squash_instruction;
     assign ifd_cache_miss_paddr = {ift_pc_paddr.tag, ift_pc_paddr.set_idx};
     assign ifd_cache_miss_thread_idx = ift_thread_idx;
-    assign perf_icache_hit = cache_hit && ift_instruction_requested;
-    assign perf_icache_miss = !cache_hit && ift_tlb_hit && ift_instruction_requested;
-    assign perf_itlb_miss = ift_instruction_requested && !ift_tlb_hit;
     assign alignment_fault = ift_pc_paddr[1:0] != 0;
 
     //
     // Cache data
     //
     sram_1r1w #(
-        .DATA_WIDTH(`CACHE_LINE_BITS),
+        .DATA_WIDTH(CACHE_LINE_BITS),
         .SIZE(`L1I_WAYS * `L1I_SETS),
         .READ_DURING_WRITE("NEW_DATA")
     ) sram_l1i_data(
@@ -151,19 +165,19 @@ module ifetch_data_stage(
         .write_data(l2i_idata_update_data),
         .*);
 
-    assign cache_lane_idx = ~ifd_pc[`CACHE_LINE_OFFSET_WIDTH - 1:2];
+    assign cache_lane_idx = ~ifd_pc[CACHE_LINE_OFFSET_WIDTH - 1:2];
     assign fetched_word = fetched_cache_line[32 * cache_lane_idx+:32];
-    assign ifd_instruction = {fetched_word[7:0], fetched_word[15:8], fetched_word[23:16], fetched_word[31:24]};
+    assign ifd_instruction = ocd_halt_latched
+        ? ocd_inject_inst
+        : {fetched_word[7:0], fetched_word[15:8], fetched_word[23:16], fetched_word[31:24]};
 
     assign ifd_update_lru_en = cache_hit && ift_instruction_requested;
     assign ifd_update_lru_way = way_hit_idx;
-    assign rollback_this_stage = wb_rollback_en && wb_rollback_thread_idx
-        == ift_thread_idx;
 
     always_ff @(posedge clk)
     begin
         ifd_pc <= ift_pc_vaddr;
-        ifd_thread_idx <= ift_thread_idx;
+        ifd_thread_idx <= ocd_halt ? ocd_thread : ift_thread_idx;
     end
 
     always_ff @(posedge clk, posedge reset)
@@ -172,10 +186,15 @@ module ifetch_data_stage(
         begin
             /*AUTORESET*/
             // Beginning of autoreset for uninitialized flops
+            ocd_halt_latched <= '0;
             ifd_alignment_fault <= '0;
             ifd_executable_fault <= '0;
+            ifd_inst_injected <= '0;
             ifd_instruction_valid <= '0;
             ifd_page_fault <= '0;
+            ifd_perf_icache_hit <= '0;
+            ifd_perf_icache_miss <= '0;
+            ifd_perf_itlb_miss <= '0;
             ifd_supervisor_fault <= '0;
             ifd_tlb_miss <= '0;
             // End of automatics
@@ -186,23 +205,53 @@ module ifetch_data_stage(
             // if an instruction wasn't requested).
             assert(!ift_instruction_requested || $onehot0(way_hit_oh));
 
-            ifd_instruction_valid <= ift_instruction_requested && !rollback_this_stage
-                && cache_hit && ift_tlb_hit && !alignment_fault;
-            ifd_alignment_fault <= ift_instruction_requested && !rollback_this_stage
-                && alignment_fault;
-            ifd_supervisor_fault <= ift_instruction_requested && ift_tlb_supervisor
-                && !cr_supervisor_en[ift_thread_idx];
-            ifd_tlb_miss <= ift_instruction_requested && !rollback_this_stage
-                && !ift_tlb_hit;
-            ifd_page_fault <= ift_instruction_requested && !rollback_this_stage
-                && !ift_tlb_present;
-            ifd_executable_fault <= ift_instruction_requested && !rollback_this_stage
-                && !ift_tlb_executable;
+            ocd_halt_latched <= ocd_halt;
+            if (ocd_halt)
+            begin
+                ifd_instruction_valid <= ocd_inject_en && core_selected_debug;
+                ifd_inst_injected <= 1;
+                ifd_alignment_fault <= 0;
+                ifd_supervisor_fault <= 0;
+                ifd_tlb_miss <= 0;
+                ifd_page_fault <= 0;
+                ifd_executable_fault <= 0;
+            end
+            else
+            begin
+                // ifd_instruction_valid should be ignored if any of the other
+                // fault signals are set.
+                ifd_instruction_valid <= ift_instruction_requested && !squash_instruction
+                    && cache_hit && ift_tlb_hit;
+                ifd_inst_injected <= 0;
+                ifd_alignment_fault <= ift_instruction_requested && !squash_instruction
+                    && alignment_fault;
+                ifd_supervisor_fault <= ift_instruction_requested && !squash_instruction
+                    && ift_tlb_hit && ift_tlb_present && ift_tlb_supervisor
+                    && !cr_supervisor_en[ift_thread_idx];
+                ifd_tlb_miss <= ift_instruction_requested && !squash_instruction
+                    && !ift_tlb_hit;
+                ifd_page_fault <= ift_instruction_requested && !squash_instruction
+                    && ift_tlb_hit && !ift_tlb_present;
+                ifd_executable_fault <= ift_instruction_requested && !squash_instruction
+                    && ift_tlb_hit && ift_tlb_present && !ift_tlb_executable;
+
+                // These faults can't occur together. The first require
+                // a TLB entry to read the bits, the second require a page to be present.
+                assert(!ifd_tlb_miss || !ifd_supervisor_fault);
+                assert(!ifd_tlb_miss || !ifd_page_fault);
+                assert(!ifd_tlb_miss || !ifd_executable_fault);
+                assert(!ifd_tlb_miss || !ifd_instruction_valid);
+                assert(!ifd_page_fault || !ifd_supervisor_fault);
+                assert(!ifd_page_fault || !ifd_executable_fault);
+
+                // Perf counters
+                ifd_perf_icache_hit <= cache_hit && ift_instruction_requested;
+                ifd_perf_icache_miss <= !cache_hit
+                    && ift_tlb_hit
+                    && ift_instruction_requested
+                    && !squash_instruction;
+                ifd_perf_itlb_miss <= ift_instruction_requested && !ift_tlb_hit;
+            end
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

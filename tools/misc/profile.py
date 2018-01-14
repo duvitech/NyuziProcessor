@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright 2011-2015 Jeff Bush
 #
@@ -30,15 +30,13 @@ import sys
 import re
 
 symbolre = re.compile(
-    '(?P<addr>[A-Fa-f0-9]+) g\s+F\s+\.text\s+[A-Fa-f0-9]+\s+(?P<symbol>\w+)')
+    r'(?P<addr>[A-Fa-f0-9]+) g\s+F\s+\.text\s+[A-Fa-f0-9]+\s+(?P<symbol>\w+)')
 
 functions = []  # Each element is (address, name)
 counts = {}
 
 
-def findFunction(pc):
-    global functions
-
+def find_function(pc):
     low = 0
     high = len(functions)
     while low < high:
@@ -65,23 +63,22 @@ with open(sys.argv[1], 'r') as f:
 functions.sort(key=lambda a: a[0])
 
 # Read profile trace
-linesProcessed = 0
+lines_processed = 0
 with open(sys.argv[2], 'r') as f:
     for line in f.readlines():
-        pc = int(line, 16)
-        func = findFunction(pc)
+        func = find_function(int(line, 16))
         if func:
             counts[func] += 1
 
-totalCycles = 0
-sortedTab = []
+total_cycles = 0
+sorted_tab = []
 for name in counts:
-    sortedTab += [(counts[name], name)]
-    totalCycles += counts[name]
+    sorted_tab += [(counts[name], name)]
+    total_cycles += counts[name]
 
-for count, name in sorted(sortedTab, key=lambda func: func[0], reverse=True):
+for count, name in sorted(sorted_tab, key=lambda func: func[0], reverse=True):
     if count == 0:
         break
 
     print(str(count) + ' ' +
-          str(float(count * 10000 / totalCycles) / 100) + '% ' + name)
+          str(float(count * 10000 / total_cycles) / 100) + '% ' + name)

@@ -14,11 +14,10 @@
 // limitations under the License.
 //
 
-#ifndef __INSTRUCTION_SET_H
-#define __INSTRUCTION_SET_H
+#ifndef INSTRUCTION_SET_H
+#define INSTRUCTION_SET_H
 
-#define LINK_REG 30
-#define PC_REG 31
+#define LINK_REG 31
 #define INSTRUCTION_NOP 0
 
 #define TLB_PRESENT 1
@@ -27,7 +26,7 @@
 #define TLB_SUPERVISOR 8
 #define TLB_GLOBAL 16
 
-enum _ArithmeticOp
+enum arithmetic_op
 {
     OP_OR = 0,
     OP_AND = 1,
@@ -69,11 +68,11 @@ enum _ArithmeticOp
     OP_CMPLE_F = 47,
     OP_CMPEQ_F = 48,
     OP_CMPNE_F = 49,
+    OP_BREAKPOINT = 62,
     OP_SYSCALL = 63
 };
-typedef enum _ArithmeticOp ArithmeticOp;
 
-enum _RegisterArithFormat
+enum register_arith_format
 {
     FMT_RA_SS = 0,
     FMT_RA_VS = 1,
@@ -81,19 +80,16 @@ enum _RegisterArithFormat
     FMT_RA_VV = 4,
     FMT_RA_VV_M = 5
 };
-typedef enum _RegisterArithFormat RegisterArithFormat;
 
-enum _ImmediateArithFormat
+enum immediate_arith_format
 {
-    FMT_IMM_SS = 0,
-    FMT_IMM_VV = 1,
-    FMT_IMM_VV_M = 2,
-    FMT_IMM_VS = 4,
-    FMT_IMM_VS_M = 5
+    FMT_IMM_S = 0,
+    FMT_IMM_V = 1,
+    FMT_IMM_MOVEHI = 2,
+    FMT_IMM_VM = 3,
 };
-typedef enum _ImmediateArithFormat ImmediateArithFormat;
 
-enum _MemoryOp
+enum memory_op
 {
     MEM_BYTE = 0,
     MEM_BYTE_SEXT = 1,
@@ -107,29 +103,26 @@ enum _MemoryOp
     MEM_SCGATH = 13,
     MEM_SCGATH_MASK = 14
 };
-typedef enum _MemoryOp MemoryOp;
 
-enum _BranchType
+enum branch_type
 {
-    BRANCH_ALL = 0,
+    BRANCH_REGISTER = 0,
     BRANCH_ZERO = 1,
     BRANCH_NOT_ZERO = 2,
     BRANCH_ALWAYS = 3,
     BRANCH_CALL_OFFSET = 4,
-    BRANCH_NOT_ALL = 5,
     BRANCH_CALL_REGISTER = 6,
     BRANCH_ERET = 7
 };
-typedef enum _BranchType BranchType;
 
-enum _ControlRegister
+enum control_register
 {
     CR_THREAD_ID = 0,
-    CR_FAULT_HANDLER = 1,
-    CR_FAULT_PC = 2,
-    CR_FAULT_REASON = 3,
+    CR_TRAP_HANDLER = 1,
+    CR_TRAP_PC = 2,
+    CR_TRAP_REASON = 3,
     CR_FLAGS = 4,
-    CR_FAULT_ADDRESS = 5,
+    CR_TRAP_ACCESS_ADDR = 5,
     CR_CYCLE_COUNT = 6,
     CR_TLB_MISS_HANDLER = 7,
     CR_SAVED_FLAGS = 8,
@@ -137,30 +130,30 @@ enum _ControlRegister
     CR_PAGE_DIR = 10,
     CR_SCRATCHPAD0 = 11,
     CR_SCRATCHPAD1 = 12,
-    CR_SUBCYCLE = 13
+    CR_SUBCYCLE = 13,
+    CR_INTERRUPT_MASK = 14,
+    CR_INTERRUPT_ACK = 15,
+    CR_INTERRUPT_PENDING = 16,
+    CR_INTERRUPT_TRIGGER = 17
 };
-typedef enum _ControlRegister ControlRegister;
 
-enum _TrapReason
+enum trap_type
 {
-    TR_RESET = 0,
-    TR_ILLEGAL_INSTRUCTION = 1,
-    TR_DATA_ALIGNMENT = 2,
-    TR_PAGE_FAULT = 3,
-    TR_IFETCH_ALIGNNMENT = 4,
-    TR_ITLB_MISS = 5,
-    TR_DTLB_MISS = 6,
-    TR_ILLEGAL_WRITE = 7,
-    TR_DATA_SUPERVISOR = 8,
-    TR_IFETCH_SUPERVISOR = 9,
-    TR_PRIVILEGED_OP = 10,
-    TR_SYSCALL = 11,
-    TR_NOT_EXECUTABLE = 12,
-    TR_INTERRUPT_BASE = 16
+    TT_RESET = 0,
+    TT_ILLEGAL_INSTRUCTION = 1,
+    TT_PRIVILEGED_OP = 2,
+    TT_INTERRUPT = 3,
+    TT_SYSCALL = 4,
+    TT_UNALIGNED_ACCESS = 5,
+    TT_PAGE_FAULT = 6,
+    TT_TLB_MISS = 7,
+    TT_ILLEGAL_STORE = 8,
+    TT_SUPERVISOR_ACCESS = 9,
+    TT_NOT_EXECUTABLE = 10,
+    TT_BREAKPOINT = 11
 };
-typedef enum _TrapReason TrapReason;
 
-enum _CacheControlOp
+enum cache_control_op
 {
     CC_DTLB_INSERT = 0,
     CC_DINVALIDATE = 1,
@@ -169,6 +162,5 @@ enum _CacheControlOp
     CC_INVALIDATE_TLB_ALL = 6,
     CC_ITLB_INSERT = 7
 };
-typedef enum _CacheControlOp CacheControlOp;
 
 #endif

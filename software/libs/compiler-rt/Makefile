@@ -18,21 +18,18 @@ TOPDIR=../../../
 
 include $(TOPDIR)/build/target.mk
 
-CFLAGS+=-g
+CFLAGS+=-g -Werror
 
 SRCS=ashldi3.s \
 	divsi3.c \
 	divdi3.c \
 	lshrdi3.s \
-	memcpy.s \
-	memset.c \
 	modsi3.c \
 	moddi3.c \
-	udivsi3.c \
+	udivsi3.s \
 	udivdi3.c \
 	umodsi3.c \
 	umoddi3.c \
-	memcmp.c \
 	floatundisf.c
 
 OBJS := $(SRCS_TO_OBJS)

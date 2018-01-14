@@ -22,11 +22,12 @@
 #include "TriangleFiller.h"
 #include "SIMDMath.h"
 
-using namespace librender;
+namespace librender
+{
 
 RenderContext::RenderContext(size_t workingMemSize)
     : 	fClearColorBuffer(false),
-        fAllocator(workingMemSize)
+       fAllocator(workingMemSize)
 {
     fDrawQueue.setAllocator(&fAllocator);
 }
@@ -37,7 +38,8 @@ void RenderContext::setClearColor(float r, float g, float b)
     g = max(min(g, 1.0f), 0.0f);
     b = max(min(b, 1.0f), 0.0f);
 
-    fClearColor = 0xff000000 | (int(b * 255.0) << 16) | (int(g * 255.0) << 8) | int(r * 255.0);
+    fClearColor = 0xff000000 | (unsigned(b * 255.0) << 16) | (unsigned(g * 255.0) << 8)
+                  | unsigned(r * 255.0);
 }
 
 void RenderContext::bindVertexAttrs(const RenderBuffer *vertexAttrs)
@@ -111,22 +113,24 @@ void RenderContext::finish()
         RenderState &state = *fRenderCommandIterator;
         int numVertices = state.fVertexAttrBuffer->getNumElements();
         int numTriangles = state.fIndexBuffer->getNumElements() / 3;
-        state.fVertexParams = static_cast<float*>(fAllocator.alloc(numVertices
-                              * state.fShader->getNumParams() * sizeof(float)));
-        parallelExecute(_shadeVertices, this, (numVertices + 15) / 16);
-        parallelExecute(_setUpTriangle, this, numTriangles);
+        state.fVertexParams = static_cast<float*>(fAllocator.alloc(
+                                  static_cast<unsigned int>(numVertices)
+                                  * static_cast<unsigned int>(state.fShader->getNumParams())
+                                  * sizeof(int)));
+        parallel_execute(_shadeVertices, this, (numVertices + 15) / 16);
+        parallel_execute(_setUpTriangle, this, numTriangles);
         fBaseSequenceNumber += numTriangles;
     }
 
     // Pixel phase.  Shade the pixels and write back.
     if (fWireframeMode)
-        parallelExecute(_wireframeTile, this, fTileColumns * fTileRows);
+        parallel_execute(_wireframeTile, this, fTileColumns * fTileRows);
     else
-        parallelExecute(_fillTile, this, fTileColumns * fTileRows);
+        parallel_execute(_fillTile, this, fTileColumns * fTileRows);
 
 #if DISPLAY_STATS
     printf("total triangles = %d\n", fBaseSequenceNumber);
-    printf("used %d bytes\n", fAllocator.bytesUsed());
+    printf("used %zu bytes\n", fAllocator.bytesUsed());
 #endif
 
     // Clean up memory
@@ -146,22 +150,19 @@ void RenderContext::shadeVertices(int index)
 {
     const RenderState &state = *fRenderCommandIterator;
     int numVertices = state.fVertexAttrBuffer->getNumElements() - index * 16;
-    int mask;
+    vmask_t mask;
     if (numVertices < 16)
-        mask = (0xffff0000 >> numVertices) & 0xffff;
+        mask = (1 << numVertices) - 1;
     else
-    {
-        numVertices = 16;
         mask = 0xffff;
-    }
 
     int attribsPerVertex = state.fShader->getNumAttribs();
     vecf16_t packedAttribs[attribsPerVertex];
     int startIndex = index * 16;
     for (int attrib = 0; attrib < attribsPerVertex; attrib++)
     {
-        packedAttribs[attrib] = state.fVertexAttrBuffer->gatherElements(startIndex,
-                                attrib, mask);
+        packedAttribs[attrib] = vecf16_t(state.fVertexAttrBuffer->gatherElements(startIndex,
+                                         attrib, mask));
     }
 
     int paramsPerVertex = state.fShader->getNumParams();
@@ -169,17 +170,18 @@ void RenderContext::shadeVertices(int index)
     state.fShader->shadeVertices(packedParams, packedAttribs, state.fUniforms, mask);
 
     const veci16_t kStepVector = { 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60 };
-    const veci16_t paramStepVector = kStepVector * splati(paramsPerVertex);
+    const veci16_t paramStepVector = kStepVector * paramsPerVertex;
     float *outBuf = state.fVertexParams + paramsPerVertex * index * 16;
-    veci16_t paramPtr = paramStepVector + splati(reinterpret_cast<unsigned int>(outBuf));
+    veci16_t paramPtr = paramStepVector + reinterpret_cast<int>(outBuf);
     for (int param = 0; param < paramsPerVertex; param++)
     {
         __builtin_nyuzi_scatter_storef_masked(paramPtr, packedParams[param], mask);
-        paramPtr += splati(4);
+        paramPtr += 4;
     }
 }
 
-namespace {
+namespace
+{
 
 const float kNearWClip = 1.0;
 
@@ -190,7 +192,7 @@ void interpolate(float *outParams, const float *inParams0, const float *inParams
         outParams[i] = inParams0[i] * (1.0 - distance) + inParams1[i] * distance;
 }
 
-}
+} // namespace
 
 //
 // Clip a triangle where one vertex is past the near clip plane.
@@ -274,37 +276,37 @@ void RenderContext::setUpTriangle(int triangleIndex)
                    | (params2[kParamW] < kNearWClip ? 4 : 0);
     switch (clipMask)
     {
-        case 0:
-            // Not clipped at all.
-            enqueueTriangle(fBaseSequenceNumber + triangleIndex, state,
-                            params0, params1, params2);
-            break;
+    case 0:
+        // Not clipped at all.
+        enqueueTriangle(fBaseSequenceNumber + triangleIndex, state,
+                        params0, params1, params2);
+        break;
 
-        case 1:
-            clipOne(fBaseSequenceNumber + triangleIndex, state, params0, params1, params2);
-            break;
+    case 1:
+        clipOne(fBaseSequenceNumber + triangleIndex, state, params0, params1, params2);
+        break;
 
-        case 2:
-            clipOne(fBaseSequenceNumber + triangleIndex, state, params1, params2, params0);
-            break;
+    case 2:
+        clipOne(fBaseSequenceNumber + triangleIndex, state, params1, params2, params0);
+        break;
 
-        case 4:
-            clipOne(fBaseSequenceNumber + triangleIndex, state, params2, params0, params1);
-            break;
+    case 4:
+        clipOne(fBaseSequenceNumber + triangleIndex, state, params2, params0, params1);
+        break;
 
-        case 3:
-            clipTwo(fBaseSequenceNumber + triangleIndex, state, params0, params1, params2);
-            break;
+    case 3:
+        clipTwo(fBaseSequenceNumber + triangleIndex, state, params0, params1, params2);
+        break;
 
-        case 6:
-            clipTwo(fBaseSequenceNumber + triangleIndex, state, params1, params2, params0);
-            break;
+    case 6:
+        clipTwo(fBaseSequenceNumber + triangleIndex, state, params1, params2, params0);
+        break;
 
-        case 5:
-            clipTwo(fBaseSequenceNumber + triangleIndex, state, params2, params0, params1);
-            break;
+    case 5:
+        clipTwo(fBaseSequenceNumber + triangleIndex, state, params2, params0, params1);
+        break;
 
-            // Else is totally clipped, ignore
+        // Else is totally clipped, ignore
     }
 }
 
@@ -373,7 +375,7 @@ void RenderContext::enqueueTriangle(int sequence, const RenderState &state, cons
 
     // Copy parameters into triangle structure, skipping position which is already
     // in x0/y0/z0/x1...
-    int paramSize = sizeof(float) * (state.fParamsPerVertex - 4);
+    unsigned int paramSize = sizeof(float) * static_cast<unsigned int>(state.fParamsPerVertex - 4);
     float *params = static_cast<float*>(fAllocator.alloc(paramSize * 3));
     memcpy(params, params0 + 4, paramSize);
     memcpy(params + state.fParamsPerVertex - 4, params1 + 4, paramSize);
@@ -415,7 +417,7 @@ bool triangleRejected(int left, int top, int right, int bottom,
            || edgeRejected(left, top, right, bottom, x3, y3, x1, y1);
 }
 
-}
+} // namespace
 
 void RenderContext::fillTile(int index)
 {
@@ -525,3 +527,5 @@ void RenderContext::wireframeTile(int index)
 
     colorBuffer->flushTile(tileX, tileY);
 }
+
+} // namespace librender

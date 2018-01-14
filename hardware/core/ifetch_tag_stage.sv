@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // Instruction Pipeline - Instruction Fetch Tag Stage
 // - Selects a program counter from one of the threads to fetch from the
@@ -33,24 +35,24 @@ module ifetch_tag_stage
     (input                              clk,
     input                               reset,
 
-    // To ifetch_data_stage
-    output logic                        ift_instruction_requested,
-    output l1i_addr_t                   ift_pc_paddr,
-    output scalar_t                     ift_pc_vaddr,
-    output thread_idx_t                 ift_thread_idx,
-    output logic                        ift_tlb_hit,
-    output                              ift_tlb_present,
-    output                              ift_tlb_executable,
-    output                              ift_tlb_supervisor,
-    output l1i_tag_t                    ift_tag[`L1I_WAYS],
-    output logic                        ift_valid[`L1I_WAYS],
-
     // From ifetch_data_stage
     input                               ifd_update_lru_en,
     input l1i_way_idx_t                 ifd_update_lru_way,
     input                               ifd_cache_miss,
     input                               ifd_near_miss,
-    input thread_idx_t                  ifd_cache_miss_thread_idx,
+    input local_thread_idx_t            ifd_cache_miss_thread_idx,
+
+    // To ifetch_data_stage
+    output logic                        ift_instruction_requested,
+    output l1i_addr_t                   ift_pc_paddr,
+    output scalar_t                     ift_pc_vaddr,
+    output local_thread_idx_t           ift_thread_idx,
+    output logic                        ift_tlb_hit,
+    output logic                        ift_tlb_present,
+    output logic                        ift_tlb_executable,
+    output logic                        ift_tlb_supervisor,
+    output l1i_tag_t                    ift_tag[`L1I_WAYS],
+    output logic                        ift_valid[`L1I_WAYS],
 
     // From l1_l2_interface
     input                               l2i_icache_lru_fill_en,
@@ -59,17 +61,18 @@ module ifetch_tag_stage
     input l1i_set_idx_t                 l2i_itag_update_set,
     input l1i_tag_t                     l2i_itag_update_tag,
     input                               l2i_itag_update_valid,
-    input thread_bitmap_t               l2i_icache_wake_bitmap,
+    input local_thread_bitmap_t         l2i_icache_wake_bitmap,
     output l1i_way_idx_t                ift_fill_lru,
 
     // From control_registers
     input                               cr_mmu_en[`THREADS_PER_CORE],
-    input [`ASID_WIDTH - 1:0]           cr_current_asid[`THREADS_PER_CORE],
+    input [ASID_WIDTH - 1:0]            cr_current_asid[`THREADS_PER_CORE],
 
     // From dcache_tag_stage
     input                               dt_invalidate_tlb_en,
     input                               dt_invalidate_tlb_all_en,
-    input page_index_t                  dt_itlb_vpage_idx,
+    input [ASID_WIDTH - 1:0]            dt_update_itlb_asid,
+    input page_index_t                  dt_update_itlb_vpage_idx,
     input                               dt_update_itlb_en,
     input                               dt_update_itlb_supervisor,
     input                               dt_update_itlb_global,
@@ -79,23 +82,27 @@ module ifetch_tag_stage
 
     // From writeback_stage
     input                               wb_rollback_en,
-    input thread_idx_t                  wb_rollback_thread_idx,
+    input local_thread_idx_t            wb_rollback_thread_idx,
     input scalar_t                      wb_rollback_pc,
 
     // From thread_select_stage
-    input thread_bitmap_t               ts_fetch_en);
+    input local_thread_bitmap_t         ts_fetch_en,
+
+    // From debug_controller
+    input                               ocd_halt,
+    input local_thread_idx_t            ocd_thread);
 
     scalar_t next_program_counter[`THREADS_PER_CORE];
-    thread_idx_t selected_thread_idx;
+    local_thread_idx_t selected_thread_idx;
     scalar_t last_selected_pc;
     l1i_addr_t pc_to_fetch;
-    thread_bitmap_t can_fetch_thread_bitmap;
-    thread_bitmap_t selected_thread_oh;
-    thread_bitmap_t last_selected_thread_oh;
-    thread_bitmap_t icache_wait_threads;
-    thread_bitmap_t icache_wait_threads_nxt;
-    thread_bitmap_t cache_miss_thread_oh;
-    thread_bitmap_t thread_sleep_mask_oh;
+    local_thread_bitmap_t can_fetch_thread_bitmap;
+    local_thread_bitmap_t selected_thread_oh;
+    local_thread_bitmap_t last_selected_thread_oh;
+    local_thread_bitmap_t icache_wait_threads;
+    local_thread_bitmap_t icache_wait_threads_nxt;
+    local_thread_bitmap_t cache_miss_thread_oh;
+    local_thread_bitmap_t thread_sleep_mask_oh;
     logic cache_fetch_en;
     page_index_t tlb_ppage_idx;
     page_index_t ppage_idx;
@@ -103,6 +110,8 @@ module ifetch_tag_stage
     logic tlb_supervisor;
     logic tlb_present;
     logic tlb_executable;
+    page_index_t request_vpage_idx;
+    logic[ASID_WIDTH - 1:0] request_asid;
 
     //
     // Pick which thread to fetch next.
@@ -111,14 +120,15 @@ module ifetch_tag_stage
     // have a long combinational path that is a critical path for clock speed.
     // Instead, when the selected thread is rolled back in the same cycle,
     // invalidate the instruction by deasserting ift_instruction_requested. This
-    // wastes a cycle, but this should be infrequent.
+    // wastes a cycle, but should be infrequent.
     //
     assign can_fetch_thread_bitmap = ts_fetch_en & ~icache_wait_threads;
 
     // If an instruction is updating the TLB, can't access it to translate the next
     // address, so skip instruction fetch this cycle.
     assign cache_fetch_en = |can_fetch_thread_bitmap && !dt_update_itlb_en
-        && !dt_invalidate_tlb_en && !dt_invalidate_tlb_all_en;
+        && !dt_invalidate_tlb_en && !dt_invalidate_tlb_all_en
+        && !ocd_halt;
 
     rr_arbiter #(.NUM_REQUESTERS(`THREADS_PER_CORE)) thread_select_arbiter(
         .request(can_fetch_thread_bitmap),
@@ -130,6 +140,9 @@ module ifetch_tag_stage
         .one_hot(selected_thread_oh),
         .index(selected_thread_idx));
 
+    //
+    // Program counter update logic
+    //
     genvar thread_idx;
     generate
         for (thread_idx = 0; thread_idx < `THREADS_PER_CORE; thread_idx++)
@@ -138,7 +151,7 @@ module ifetch_tag_stage
             begin
                 if (reset)
                     next_program_counter[thread_idx] <= RESET_PC;
-                else if (wb_rollback_en && wb_rollback_thread_idx == thread_idx_t'(thread_idx))
+                else if (wb_rollback_en && wb_rollback_thread_idx == local_thread_idx_t'(thread_idx))
                     next_program_counter[thread_idx] <= wb_rollback_pc;
                 else if ((ifd_cache_miss || ifd_near_miss) && last_selected_thread_oh[thread_idx])
                     next_program_counter[thread_idx] <= next_program_counter[thread_idx] - 4;
@@ -148,7 +161,7 @@ module ifetch_tag_stage
         end
     endgenerate
 
-    assign pc_to_fetch = next_program_counter[selected_thread_idx];
+    assign pc_to_fetch = next_program_counter[ocd_halt ? ocd_thread : selected_thread_idx];
 
     //
     // Cache way metadata
@@ -199,7 +212,21 @@ module ifetch_tag_stage
         end
     endgenerate
 
-`ifdef HAS_MMU
+    // TLB inputs
+    always_comb
+    begin
+        if (dt_update_itlb_en)
+        begin
+            request_vpage_idx = dt_update_itlb_vpage_idx;
+            request_asid = dt_update_itlb_asid;
+        end
+        else
+        begin
+            request_vpage_idx = pc_to_fetch[31-:PAGE_NUM_BITS];
+            request_asid = cr_current_asid[selected_thread_idx];
+        end
+    end
+
     tlb #(
         .NUM_ENTRIES(`DTLB_ENTRIES),
         .NUM_WAYS(`TLB_WAYS)
@@ -212,8 +239,6 @@ module ifetch_tag_stage
         .update_global(dt_update_itlb_global),
         .invalidate_en(dt_invalidate_tlb_en),
         .invalidate_all_en(dt_invalidate_tlb_all_en),
-        .request_vpage_idx(cache_fetch_en ? pc_to_fetch[31-:`PAGE_NUM_BITS] : dt_itlb_vpage_idx),
-        .request_asid(cr_current_asid[selected_thread_idx]),
         .update_ppage_idx(dt_update_itlb_ppage_idx),
         .lookup_ppage_idx(tlb_ppage_idx),
         .lookup_hit(tlb_hit),
@@ -236,31 +261,26 @@ module ifetch_tag_stage
         end
         else
         begin
-            // MMU disabled, identity map.
+            // Address translation disabled, use identity mapping.
             ift_tlb_hit = 1;
             ift_tlb_present = 1;
             ift_tlb_executable = 1;
             ift_tlb_supervisor = 0;
-            ppage_idx = last_selected_pc[31-:`PAGE_NUM_BITS];
+            ppage_idx = last_selected_pc[31-:PAGE_NUM_BITS];
         end
     end
-`else
-    // If MMU is disabled, identity map addresses
-    assign ift_tlb_hit = 1;
-    assign ift_tlb_present = 1;
-    assign ift_executable = 1;
-    assign ift_tlb_supervisor = 0;
-    assign ppage_idx = last_selected_pc[31-:`PAGE_NUM_BITS];
-`endif
 
-    cache_lru #(.NUM_WAYS(`L1D_WAYS), .NUM_SETS(`L1I_SETS)) cache_lru(
+    cache_lru #(
+        .NUM_WAYS(`L1D_WAYS),
+        .NUM_SETS(`L1I_SETS)
+    ) cache_lru(
         .fill_en(l2i_icache_lru_fill_en),
         .fill_set(l2i_icache_lru_fill_set),
         .fill_way(ift_fill_lru),
         .access_en(cache_fetch_en),
         .access_set(pc_to_fetch.set_idx),
-        .access_update_en(ifd_update_lru_en),
-        .access_update_way(ifd_update_lru_way),
+        .update_en(ifd_update_lru_en),
+        .update_way(ifd_update_lru_way),
         .*);
 
     //
@@ -303,12 +323,6 @@ module ifetch_tag_stage
         last_selected_thread_oh <= selected_thread_oh;
     end
 
-    assign ift_pc_paddr = {ppage_idx, last_selected_pc[31 - `PAGE_NUM_BITS:0]};
+    assign ift_pc_paddr = {ppage_idx, last_selected_pc[31 - PAGE_NUM_BITS:0]};
     assign ift_pc_vaddr = last_selected_pc;
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:
-

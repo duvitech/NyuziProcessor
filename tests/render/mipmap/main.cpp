@@ -23,6 +23,7 @@
 
 #include <math.h>
 #include <Matrix.h>
+#include <nyuzi.h>
 #include <RenderContext.h>
 #include <RenderTarget.h>
 #include <schedule.h>
@@ -50,8 +51,8 @@ Texture *makeMipMaps()
 {
     const unsigned int kColors[] =
     {
-        0xff0000ff,	// Red
-        0xff00ff00,	// Blue
+        0xff0000ff, // Red
+        0xff00ff00, // Blue
         0xffff0000, // Green
         0xff00ffff, // Yellow
     };
@@ -60,7 +61,7 @@ Texture *makeMipMaps()
     for (int i = 0; i < 4; i++)
     {
         int mipSize = 512 >> i;
-        Surface *mipSurface = new Surface(mipSize, mipSize);
+        Surface *mipSurface = new Surface(mipSize, mipSize, Surface::RGBA8888);
         unsigned int *bits = static_cast<unsigned int*>(mipSurface->bits());
         unsigned int color = kColors[i];
         for (int y = 0; y < mipSize; y++)
@@ -84,19 +85,22 @@ Texture *makeMipMaps()
 // All threads start execution here.
 int main()
 {
-    if (__builtin_nyuzi_read_control_reg(0) == 0)
-        initVGA(VGA_MODE_640x480);
-    else
-        workerThread();
+    void *frameBuffer;
+    if (get_current_thread_id() != 0)
+        worker_thread();
 
-    startAllThreads();
+    // Set up render context
+    frameBuffer = init_vga(VGA_MODE_640x480);
+
+    start_all_threads();
 
     Texture *texture = makeMipMaps();
     texture->enableBilinearFiltering(true);
 
     RenderContext *context = new RenderContext();
     RenderTarget *renderTarget = new RenderTarget();
-    Surface *colorBuffer = new Surface(kFbWidth, kFbHeight, (void*) 0x200000);
+    Surface *colorBuffer = new Surface(kFbWidth, kFbHeight, Surface::RGBA8888,
+        frameBuffer);
     renderTarget->setColorBuffer(colorBuffer);
     context->bindTarget(renderTarget);
     context->clearColorBuffer();

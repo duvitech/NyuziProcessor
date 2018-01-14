@@ -15,6 +15,7 @@
 #
 
 #
+# This is synthesized into ROM in high memory on FPGA.
 # When the processor comes out of reset, it starts execution here. This sets
 # up the stack and calls main, which runs the serial loader. After main returns,
 # this jumps to address 0, where it should have loaded the new program. When
@@ -28,13 +29,11 @@
 
                     .globl _start
                     .type _start,@function
-_start:             getcr s0, 0
-                    btrue s0, jump_to_zero
+_start:             getcr s0, 0             # Get current thread ID
+                    bnz s0, jump_to_zero    # Not thread 0, skip loader
 
-                    # Set up stack
-                    load_32 sp, temp_stack
-                    call main
+                    li sp, 0x400000         # Temporary stack
+                    call main               # Serial loader
 
-jump_to_zero:       move pc, 0
-
-temp_stack:         .long 0x400000
+jump_to_zero:       move s0, 0
+                    b s0              # Jump to program in SDRAM

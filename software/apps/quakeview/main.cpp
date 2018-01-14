@@ -25,7 +25,7 @@
 #include <time.h>
 #include <vga.h>
 #include "PakFile.h"
-#include "Render.h"
+#include "LevelRenderer.h"
 #include "TextureShader.h"
 
 using namespace librender;
@@ -61,7 +61,7 @@ void processKeyboardEvents()
     // Consume as many keyboard events as are available.
     while (true)
     {
-        unsigned int keyCode = pollKeyboard();
+        unsigned int keyCode = poll_keyboard();
         if (keyCode == 0xffffffff)
             break;
 
@@ -136,14 +136,14 @@ void processKeyboardEvents()
         gCameraOrientationMatrix *= kRotateLeft;
 
     if (gKeyPressed[kUpArrow])
-        gCameraPos += gCameraOrientationMatrix.inverse() * Vec3(0, 0, -kMoveSpeed);
+        gCameraPos += gCameraOrientationMatrix.transpose() * Vec3(0, 0, -kMoveSpeed);
     else if (gKeyPressed[kDownArrow])
-        gCameraPos += gCameraOrientationMatrix.inverse() * Vec3(0, 0, kMoveSpeed);
+        gCameraPos += gCameraOrientationMatrix.transpose() * Vec3(0, 0, kMoveSpeed);
 
     if (gKeyPressed[kUKey])
-        gCameraPos += gCameraOrientationMatrix.inverse() * Vec3(0, kMoveSpeed, 0);
+        gCameraPos += gCameraOrientationMatrix.transpose() * Vec3(0, kMoveSpeed, 0);
     else if (gKeyPressed[kDKey])
-        gCameraPos += gCameraOrientationMatrix.inverse() * Vec3(0, -kMoveSpeed, 0);
+        gCameraPos += gCameraOrientationMatrix.transpose() * Vec3(0, -kMoveSpeed, 0);
 }
 
 void parseCoordinateString(const char *string, float outCoord[3])
@@ -178,19 +178,22 @@ void parseCoordinateString(const char *string, float outCoord[3])
 
 }
 
+
+
 // All threads start execution here.
 int main()
 {
-    if (getCurrentThreadId() == 0)
-        initVGA(VGA_MODE_640x480);
-    else
-        workerThread();
+    void *frameBuffer;
+    if (get_current_thread_id() != 0)
+        worker_thread();
 
     // Set up render context
+    frameBuffer = init_vga(VGA_MODE_640x480);
     RenderContext *context = new RenderContext(0x1000000);
     RenderTarget *renderTarget = new RenderTarget();
-    Surface *colorBuffer = new Surface(FB_WIDTH, FB_HEIGHT, (void*) 0x200000);
-    Surface *zBuffer = new Surface(FB_WIDTH, FB_HEIGHT);
+    Surface *colorBuffer = new Surface(FB_WIDTH, FB_HEIGHT, Surface::RGBA8888,
+        (void*) frameBuffer);
+    Surface *zBuffer = new Surface(FB_WIDTH, FB_HEIGHT, Surface::FLOAT);
     renderTarget->setColorBuffer(colorBuffer);
     renderTarget->setDepthBuffer(zBuffer);
     context->bindTarget(renderTarget);
@@ -202,8 +205,11 @@ int main()
     pak.open("pak0.pak");
     pak.readBspFile("maps/e1m1.bsp");
     Texture *atlasTexture = pak.getTextureAtlasTexture();
-    setBspData(pak.getBspTree(), pak.getPvsList(), pak.getBspTree() + pak.getNumInteriorNodes(),
-               pak.getNumLeaves(), atlasTexture, pak.getLightmapAtlasTexture());
+
+    LevelRenderer renderer;
+    renderer.setBspData(pak.getBspTree(), pak.getPvsList(), pak.getBspTree()
+                        + pak.getNumInteriorNodes(), pak.getNumLeaves(),
+                        atlasTexture, pak.getLightmapAtlasTexture());
     Entity *ent = pak.findEntityByClassName("info_player_start");
     if (!ent)
     {
@@ -223,7 +229,7 @@ int main()
     printf("position %g %g %g angle %g\n", coords[0], coords[1], coords[2], facingAngle);
 
     // Start worker threads
-    startAllThreads();
+    start_all_threads();
 
     TextureUniforms uniforms;
     Matrix projectionMatrix = Matrix::getProjectionMatrix(FB_WIDTH, FB_HEIGHT);
@@ -243,7 +249,7 @@ int main()
 
         context->bindUniforms(&uniforms, sizeof(uniforms));
 
-        renderScene(context, gCameraPos);
+        renderer.render(context, gCameraPos);
 
         clock_t startTime = clock();
         context->finish();

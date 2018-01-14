@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // The L2 cache has a four stage pipeline:
 //  - Arbitrate: selects one request from cores, or a restarted request
@@ -37,37 +39,46 @@
 module l2_cache(
     input                                 clk,
     input                                 reset,
+
+    // From l1_l2_interface
     input [`NUM_CORES - 1:0]              l2i_request_valid,
     input l2req_packet_t                  l2i_request[`NUM_CORES],
-    output                                l2_ready[`NUM_CORES],
+
+    // To l1_l2_interface
+    output logic                          l2_ready[`NUM_CORES],
     output logic                          l2_response_valid,
     output l2rsp_packet_t                 l2_response,
-    axi4_interface.master                 axi_bus,
-    output logic[`L2_PERF_EVENTS - 1:0]   l2_perf_events);
 
-    // XXX AUTOLOGIC not generating these.
-    l2req_packet_t l2bi_request;
-    cache_line_data_t l2bi_data_from_memory;
+    // External bus interface
+    axi4_interface.master                 axi_bus,
+
+    // To performance_counters
+    output logic[L2_PERF_EVENTS - 1:0]    l2_perf_events);
 
     /*AUTOLOGIC*/
     // Beginning of automatic wires (for undeclared instantiated-module outputs)
     cache_line_data_t   l2a_data_from_memory;   // From l2_cache_arb_stage of l2_cache_arb_stage.v
-    logic               l2a_is_l2_fill;         // From l2_cache_arb_stage of l2_cache_arb_stage.v
-    logic               l2a_is_restarted_flush; // From l2_cache_arb_stage of l2_cache_arb_stage.v
+    logic               l2a_l2_fill;            // From l2_cache_arb_stage of l2_cache_arb_stage.v
     l2req_packet_t      l2a_request;            // From l2_cache_arb_stage of l2_cache_arb_stage.v
     logic               l2a_request_valid;      // From l2_cache_arb_stage of l2_cache_arb_stage.v
+    logic               l2a_restarted_flush;    // From l2_cache_arb_stage of l2_cache_arb_stage.v
     logic               l2bi_collided_miss;     // From l2_axi_bus_interface of l2_axi_bus_interface.v
+    cache_line_data_t   l2bi_data_from_memory;  // From l2_axi_bus_interface of l2_axi_bus_interface.v
+    logic               l2bi_perf_l2_writeback; // From l2_axi_bus_interface of l2_axi_bus_interface.v
+    l2req_packet_t      l2bi_request;           // From l2_axi_bus_interface of l2_axi_bus_interface.v
     logic               l2bi_request_valid;     // From l2_axi_bus_interface of l2_axi_bus_interface.v
     logic               l2bi_stall;             // From l2_axi_bus_interface of l2_axi_bus_interface.v
     logic               l2r_cache_hit;          // From l2_cache_read_stage of l2_cache_read_stage.v
     cache_line_data_t   l2r_data;               // From l2_cache_read_stage of l2_cache_read_stage.v
     cache_line_data_t   l2r_data_from_memory;   // From l2_cache_read_stage of l2_cache_read_stage.v
     logic [$clog2(`L2_WAYS*`L2_SETS)-1:0] l2r_hit_cache_idx;// From l2_cache_read_stage of l2_cache_read_stage.v
-    logic               l2r_is_l2_fill;         // From l2_cache_read_stage of l2_cache_read_stage.v
-    logic               l2r_is_restarted_flush; // From l2_cache_read_stage of l2_cache_read_stage.v
+    logic               l2r_l2_fill;            // From l2_cache_read_stage of l2_cache_read_stage.v
     logic               l2r_needs_writeback;    // From l2_cache_read_stage of l2_cache_read_stage.v
+    logic               l2r_perf_l2_hit;        // From l2_cache_read_stage of l2_cache_read_stage.v
+    logic               l2r_perf_l2_miss;       // From l2_cache_read_stage of l2_cache_read_stage.v
     l2req_packet_t      l2r_request;            // From l2_cache_read_stage of l2_cache_read_stage.v
     logic               l2r_request_valid;      // From l2_cache_read_stage of l2_cache_read_stage.v
+    logic               l2r_restarted_flush;    // From l2_cache_read_stage of l2_cache_read_stage.v
     logic               l2r_store_sync_success; // From l2_cache_read_stage of l2_cache_read_stage.v
     logic [`L2_WAYS-1:0] l2r_update_dirty_en;   // From l2_cache_read_stage of l2_cache_read_stage.v
     l2_set_idx_t        l2r_update_dirty_set;   // From l2_cache_read_stage of l2_cache_read_stage.v
@@ -82,18 +93,15 @@ module l2_cache(
     cache_line_data_t   l2t_data_from_memory;   // From l2_cache_tag_stage of l2_cache_tag_stage.v
     logic               l2t_dirty [`L2_WAYS];   // From l2_cache_tag_stage of l2_cache_tag_stage.v
     l2_way_idx_t        l2t_fill_way;           // From l2_cache_tag_stage of l2_cache_tag_stage.v
-    logic               l2t_is_l2_fill;         // From l2_cache_tag_stage of l2_cache_tag_stage.v
-    logic               l2t_is_restarted_flush; // From l2_cache_tag_stage of l2_cache_tag_stage.v
+    logic               l2t_l2_fill;            // From l2_cache_tag_stage of l2_cache_tag_stage.v
     l2req_packet_t      l2t_request;            // From l2_cache_tag_stage of l2_cache_tag_stage.v
     logic               l2t_request_valid;      // From l2_cache_tag_stage of l2_cache_tag_stage.v
+    logic               l2t_restarted_flush;    // From l2_cache_tag_stage of l2_cache_tag_stage.v
     l2_tag_t            l2t_tag [`L2_WAYS];     // From l2_cache_tag_stage of l2_cache_tag_stage.v
     logic               l2t_valid [`L2_WAYS];   // From l2_cache_tag_stage of l2_cache_tag_stage.v
     logic [$clog2(`L2_WAYS*`L2_SETS)-1:0] l2u_write_addr;// From l2_cache_update_stage of l2_cache_update_stage.v
     cache_line_data_t   l2u_write_data;         // From l2_cache_update_stage of l2_cache_update_stage.v
     logic               l2u_write_en;           // From l2_cache_update_stage of l2_cache_update_stage.v
-    logic               perf_l2_hit;            // From l2_cache_read_stage of l2_cache_read_stage.v
-    logic               perf_l2_miss;           // From l2_cache_read_stage of l2_cache_read_stage.v
-    logic               perf_l2_writeback;      // From l2_axi_bus_interface of l2_axi_bus_interface.v
     // End of automatics
 
     l2_cache_arb_stage l2_cache_arb_stage(.*);
@@ -103,14 +111,11 @@ module l2_cache(
 
     l2_axi_bus_interface l2_axi_bus_interface(.*);
 
+    // The number of signals in this assignment must match L2_PERF_EVENTS
+    // in defines.sv.
     assign l2_perf_events = {
-        perf_l2_hit,
-        perf_l2_miss,
-        perf_l2_writeback
+        l2r_perf_l2_hit,
+        l2r_perf_l2_miss,
+        l2bi_perf_l2_writeback
     };
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

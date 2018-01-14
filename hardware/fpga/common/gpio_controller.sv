@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // General Purpose Input/Output
 // Bidirectional pins that can be driven and read
@@ -78,9 +80,3 @@ module gpio_controller
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-library-flags:("-y ../../core" "-y ../../testbench")
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

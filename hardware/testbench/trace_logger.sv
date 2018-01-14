@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // This prints register updates and memory writes to the console. The emulator
 // uses this information to verify the hardware is working correctly in
@@ -34,40 +36,42 @@ module trace_logger(
 
     // From writeback stage
     input                            wb_writeback_en,
-    input                            wb_writeback_is_vector,
-    input thread_idx_t               wb_writeback_thread_idx,
+    input                            wb_writeback_vector,
+    input local_thread_idx_t         wb_writeback_thread_idx,
     input register_idx_t             wb_writeback_reg,
     input vector_t                   wb_writeback_value,
-    input vector_lane_mask_t         wb_writeback_mask,
-    input thread_idx_t               wb_rollback_thread_idx,
-    input thread_bitmap_t            wb_interrupt_ack,
+    input vector_mask_t              wb_writeback_mask,
+    input local_thread_idx_t         wb_rollback_thread_idx,
     input scalar_t                   wb_trap_pc,
     input scalar_t                   wb_rollback_pc,
-    input                            debug_is_sync_store,
-    input pipeline_sel_t             debug_wb_pipeline,
-    input scalar_t                   debug_wb_pc,
+
+    // From floating point pipeline
+    input scalar_t                   fx5_instruction_pc,
 
     // From integer pipeline
     input                            ix_instruction_valid,
     input                            ix_instruction_has_dest,
     input register_idx_t             ix_instruction_dest_reg,
-    input                            ix_instruction_dest_is_vector,
+    input                            ix_instruction_dest_vector,
     input scalar_t                   ix_instruction_pc,
+    input                            ix_instruction_has_trap,
+    input trap_cause_t               ix_instruction_trap_cause,
+
 
     // From memory pipeline
     input                            dd_instruction_valid,
     input                            dd_instruction_has_dest,
     input register_idx_t             dd_instruction_dest_reg,
-    input                            dd_instruction_dest_is_vector,
+    input                            dd_instruction_dest_vector,
     input                            dd_rollback_en,
     input scalar_t                   dd_instruction_pc,
     input                            dd_store_en,
-    input [`CACHE_LINE_BYTES - 1:0]  dd_store_mask,
+    input [CACHE_LINE_BYTES - 1:0]   dd_store_mask,
     input vector_t                   dd_store_data,
-    input                            dd_instruction_is_load,
+    input                            dd_instruction_load,
     input memory_op_t                dd_instruction_memory_access_type,
     input scalar_t                   dt_instruction_pc,
-    input thread_idx_t               dt_thread_idx,
+    input local_thread_idx_t         dt_thread_idx,
     input scalar_t                   dt_request_virt_addr,
     input                            sq_rollback_en,
     input                            sq_store_sync_success);
@@ -85,20 +89,29 @@ module trace_logger(
     typedef struct packed {
         trace_event_type_t event_type;
         scalar_t pc;
-        thread_idx_t thread_idx;
+        local_thread_idx_t thread_idx;
         register_idx_t writeback_reg;
         scalar_t addr;
-        logic[`CACHE_LINE_BYTES - 1:0] mask;
+        logic[CACHE_LINE_BYTES - 1:0] mask;
         vector_t data;
     } trace_event_t;
 
     trace_event_t trace_reorder_queue[TRACE_REORDER_QUEUE_LEN];
     bit trace_en;
+    logic writeback_sync_store;
+    scalar_t fx5_instruction_pc_latched;
+    scalar_t dd_instruction_pc_latched;
+    scalar_t ix_instruction_pc_latched;
+    logic ix_instruction_valid_latched;
+    logic dd_instruction_valid_latched;
 
     initial
     begin
         trace_en = $test$plusargs("trace") != 0;
     end
+
+    assign writeback_sync_store = dd_instruction_valid && !dd_instruction_load
+            && dd_instruction_memory_access_type == MEM_SYNC;
 
     always_ff @(posedge clk, posedge reset)
     begin
@@ -109,6 +122,13 @@ module trace_logger(
         end
         else if (trace_en)
         begin
+            // Remember these for when the writeback comes a cycle later.
+            ix_instruction_pc_latched <= ix_instruction_pc;
+            dd_instruction_pc_latched <= dd_instruction_pc;
+            fx5_instruction_pc_latched <= fx5_instruction_pc;
+            ix_instruction_valid_latched <= ix_instruction_valid;
+            dd_instruction_valid_latched <= dd_instruction_valid;
+
             case (trace_reorder_queue[0].event_type)
                 EVENT_VWRITEBACK:
                 begin
@@ -156,56 +176,40 @@ module trace_logger(
 
             // Note that we only record the memory event for a synchronized store, not the register
             // success value.
-            if (wb_writeback_en && !debug_is_sync_store)
+            if (wb_writeback_en && !writeback_sync_store)
             begin : dump_trace_event
                 int tindex;
 
-                if (debug_wb_pipeline == PIPE_SCYCLE_ARITH)
+                if (ix_instruction_valid_latched)
+                begin
+                    // Integer pipeline result
                     tindex = 4;
-                else if (debug_wb_pipeline == PIPE_MEM)
+                    trace_reorder_queue[tindex].pc <= ix_instruction_pc_latched;
+                end
+                else if (dd_instruction_valid_latched)
+                begin
+                    // Memory pipeline result
                     tindex = 3;
-                else // Multicycle arithmetic
+                    trace_reorder_queue[tindex].pc <= dd_instruction_pc_latched;
+                end
+                else
+                begin
+                    // Floating point pipeline result
                     tindex = 0;
+                    trace_reorder_queue[tindex].pc <= fx5_instruction_pc_latched;
+                end
 
                 assert(trace_reorder_queue[tindex + 1].event_type == EVENT_INVALID);
-                if (wb_writeback_is_vector)
+                if (wb_writeback_vector)
                     trace_reorder_queue[tindex].event_type <= EVENT_VWRITEBACK;
                 else
                     trace_reorder_queue[tindex].event_type <= EVENT_SWRITEBACK;
 
-                trace_reorder_queue[tindex].pc <= debug_wb_pc;
                 trace_reorder_queue[tindex].thread_idx <= wb_writeback_thread_idx;
                 trace_reorder_queue[tindex].writeback_reg <= wb_writeback_reg;
-                trace_reorder_queue[tindex].mask <= {{`CACHE_LINE_BYTES - `VECTOR_LANES{1'b0}},
+                trace_reorder_queue[tindex].mask <= {{CACHE_LINE_BYTES - NUM_VECTOR_LANES{1'b0}},
                     wb_writeback_mask};
                 trace_reorder_queue[tindex].data <= wb_writeback_value;
-            end
-
-            // Handle PC destination.
-            if (ix_instruction_valid
-                && ix_instruction_has_dest
-                && ix_instruction_dest_reg == `REG_PC
-                && !ix_instruction_dest_is_vector)
-            begin
-                assert(trace_reorder_queue[6].event_type == EVENT_INVALID);
-                trace_reorder_queue[5].event_type <= EVENT_SWRITEBACK;
-                trace_reorder_queue[5].pc <= ix_instruction_pc;
-                trace_reorder_queue[5].thread_idx <= wb_rollback_thread_idx;
-                trace_reorder_queue[5].writeback_reg <= 31;
-                trace_reorder_queue[5].data[0] <= wb_rollback_pc;
-            end
-            else if (dd_instruction_valid
-                && dd_instruction_has_dest
-                && dd_instruction_dest_reg == `REG_PC
-                && !dd_instruction_dest_is_vector
-                && !dd_rollback_en)
-            begin
-                assert(trace_reorder_queue[5].event_type == EVENT_INVALID);
-                trace_reorder_queue[4].event_type <= EVENT_SWRITEBACK;
-                trace_reorder_queue[4].pc <= dd_instruction_pc;
-                trace_reorder_queue[4].thread_idx <= wb_rollback_thread_idx;
-                trace_reorder_queue[4].writeback_reg <= 31;
-                trace_reorder_queue[4].data[0] <= wb_rollback_pc;
             end
 
             if (dd_store_en)
@@ -215,8 +219,8 @@ module trace_logger(
                 trace_reorder_queue[5].pc <= dt_instruction_pc;
                 trace_reorder_queue[5].thread_idx <= dt_thread_idx;
                 trace_reorder_queue[5].addr <= {
-                    dt_request_virt_addr[31:`CACHE_LINE_OFFSET_WIDTH],
-                    {`CACHE_LINE_OFFSET_WIDTH{1'b0}}
+                    dt_request_virt_addr[31:CACHE_LINE_OFFSET_WIDTH],
+                    {CACHE_LINE_OFFSET_WIDTH{1'b0}}
                 };
                 trace_reorder_queue[5].mask <= dd_store_mask;
                 trace_reorder_queue[5].data <= dd_store_data;
@@ -229,13 +233,14 @@ module trace_logger(
             // Invalidate the store instruction if a synchronized store failed
             if (dd_instruction_valid
                 && dd_instruction_memory_access_type == MEM_SYNC
-                && !dd_instruction_is_load
+                && !dd_instruction_load
                 && !sq_store_sync_success)
                 trace_reorder_queue[4].event_type <= EVENT_INVALID;
 
             // Signal interrupt to emulator. These are piggybacked on instructions
             // and flow down the integer pipeline.
-            if (wb_interrupt_ack != 0)
+            if (ix_instruction_valid && ix_instruction_has_trap
+                && ix_instruction_trap_cause.trap_type == TT_INTERRUPT)
             begin
                 assert(trace_reorder_queue[6].event_type == EVENT_INVALID);
                 trace_reorder_queue[5].event_type <= EVENT_INTERRUPT;

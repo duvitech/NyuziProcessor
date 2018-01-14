@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright 2011-2015 Jeff Bush
 #
@@ -15,21 +15,41 @@
 # limitations under the License.
 #
 
-import sys
 import subprocess
-import os
-from os import path
+import sys
 
 sys.path.insert(0, '..')
-from test_harness import *
+import test_harness
 
 
-def run_emulator_test(source_file):
-    compile_test(source_file, optlevel='3')
-    result = run_emulator()
-    check_result(source_file, result)
+@test_harness.test(['emulator', 'fpga'])
+def filesystem(_, target):
+    '''
+    Filesystem tests. This creates a filesystem image with the test file fstest.txt
+    in it, the compiles the program fs.c to perform operations on it. The program
+    will print 'PASS' if it is successful.
+    '''
 
-test_list = [fname for fname in find_files(
+    test_harness.build_program(['fs.c'])
+    subprocess.check_output(
+        [test_harness.PROJECT_TOP + '/bin/mkfs', 'obj/fsimage.bin',
+         'fstest.txt'], stderr=subprocess.STDOUT)
+    result = test_harness.run_program(target='emulator',
+                                      block_device='obj/fsimage.bin')
+    if 'PASS' not in result or 'FAIL' in result:
+        raise test_harness.TestException(
+            'test program did not indicate pass\n' + result)
+
+
+def run_test(source_file, target):
+    test_harness.build_program([source_file])
+    result = test_harness.run_program(target)
+    test_harness.check_result(source_file, result)
+
+# hack: register all source files in this directory except for fs test,
+# which has special handling.
+test_list = [fname for fname in test_harness.find_files(
     ('.c', '.cpp')) if not fname.startswith('_')]
-register_tests(run_emulator_test, test_list)
-execute_tests()
+test_list.remove('fs.c')
+test_harness.register_tests(run_test, test_list, ['emulator', 'fpga'])
+test_harness.execute_tests()

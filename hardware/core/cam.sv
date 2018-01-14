@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // Content addressable memory.
 // Lookup is async: This asserts lookup_idx and lookup_hit the same cycle
@@ -86,7 +88,7 @@ module cam
     // Check for duplicate entries
     always_ff @(posedge clk, posedge reset)
     begin
-        if (!reset && update_en)
+        if (!reset && update_en && update_valid)
         begin : test
             for (int i = 0; i < NUM_ENTRIES; i++)
             begin
@@ -103,8 +105,3 @@ module cam
 `endif
 
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // First-in, first-out queue, with synchronous read/write
 // - SIZE must be a power of two and greater than or equal to 4.
@@ -28,8 +30,11 @@
 // - flush takes precedence over enqueue/dequeue if it is asserted
 //   simultaneously. It is synchronous, unlike reset.
 // - It is not legal to assert enqueue when the FIFO is full or dequeue when it
-//   is empty. This will trigger an error in the simulator and have incorrect
-//   behavior in synthesis.
+//   is empty  (The former is true even if there is a dequeue and enqueue in the
+//   same cycle, which wouldn't change the count). Doing this will trigger an
+//   error in the simulator and have incorrect behavior in synthesis.
+// - value_o will contain the next value to be dequeued even if dequeue_en is
+//   not asserted.
 //
 
 module sync_fifo
@@ -48,7 +53,7 @@ module sync_fifo
     output logic                 empty,
     output logic                 almost_empty,
     input                        dequeue_en,
-    output [WIDTH - 1:0]         value_o);
+    output logic[WIDTH - 1:0]    value_o);
 
 `ifdef VENDOR_ALTERA
     SCFIFO #(
@@ -136,9 +141,3 @@ module sync_fifo
     end
 `endif
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:
-

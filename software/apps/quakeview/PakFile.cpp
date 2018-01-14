@@ -29,6 +29,9 @@ using namespace librender;
 
 bool PakFile::open(const char *filename)
 {
+    if (fFile)
+        fclose(fFile);
+
     fFile = fopen(filename, "rb");
 
     pakheader_t header;
@@ -77,6 +80,7 @@ void *PakFile::readFile(const char *lumpname) const
     if (fread(buf, fDirectory[fileIndex].size, 1, fFile) != 1)
     {
         printf("PakFile::readFile: error reading\n");
+        free(buf);
         return nullptr;
     }
 
@@ -126,13 +130,13 @@ void PakFile::dumpEntities() const
 void PakFile::readBspFile(const char *bspFilename)
 {
     uint8_t *data = (uint8_t*) readFile(bspFilename);
-    if (!data)
+    if (data == nullptr)
     {
         printf("Couldn't find BSP file");
         return;
     }
 
-    const bspheader_t *bspHeader = (bspheader_t*) data;
+    const bspheader_t *bspHeader = reinterpret_cast<bspheader_t*>(data);
 
     if (bspHeader->version != kBspVersion)
     {
@@ -174,7 +178,8 @@ namespace
 
 int compareTexturePackingData(const void *a, const void *b)
 {
-    return ((const TexturePackingData*) b)->height - ((const TexturePackingData*) a)->height;
+    return reinterpret_cast<const TexturePackingData*>(b)->height
+        - reinterpret_cast<const TexturePackingData*>(a)->height;
 }
 
 }
@@ -198,7 +203,8 @@ void PakFile::loadTextureAtlas(const bspheader_t *bspHeader, const uint8_t *data
     //
     // Copy texture information into a temporary array
     //
-    const miptex_lump_t *mipHeader = (const miptex_lump_t*)(data + bspHeader->textures.offset);
+    const miptex_lump_t *mipHeader = reinterpret_cast<const miptex_lump_t*>(data
+        + bspHeader->textures.offset);
     fNumTextures = mipHeader->numTextures;
     printf("%d textures\n", mipHeader->numTextures);
 
@@ -218,7 +224,7 @@ void PakFile::loadTextureAtlas(const bspheader_t *bspHeader, const uint8_t *data
             continue;
         }
 
-        const miptex_t *texture = (const miptex_t*)(data + bspHeader->textures.offset
+        const miptex_t *texture = reinterpret_cast<const miptex_t*>(data + bspHeader->textures.offset
                                   + mipHeader->offset[textureIdx]);
         texArray[textureIdx].width = texture->width;
         texArray[textureIdx].height = texture->height;
@@ -238,10 +244,11 @@ void PakFile::loadTextureAtlas(const bspheader_t *bspHeader, const uint8_t *data
     //
     // Create atlas mip surfaces
     //
-    Surface *atlasSurfaces[kNumMipLevels];	// One for each mip level
+    Surface *atlasSurfaces[kNumMipLevels]; // One for each mip level
     for (int mipLevel = 0; mipLevel < kNumMipLevels; mipLevel++)
     {
-        atlasSurfaces[mipLevel] = new Surface(kAtlasSize >> mipLevel, kAtlasSize >> mipLevel);
+        atlasSurfaces[mipLevel] = new Surface(kAtlasSize >> mipLevel, kAtlasSize >> mipLevel,
+            Surface::RGBA8888);
         ::memset(atlasSurfaces[mipLevel]->bits(), 0, (kAtlasSize >> mipLevel) * (kAtlasSize >> mipLevel)
                  * 4);
     }
@@ -256,7 +263,7 @@ void PakFile::loadTextureAtlas(const bspheader_t *bspHeader, const uint8_t *data
     for (int textureIdx = 0; textureIdx < mipHeader->numTextures; textureIdx++)
     {
         if (texArray[textureIdx].data[0] == nullptr)
-            continue;	// Skip unused texture entries
+            continue;    // Skip unused texture entries
 
         if (destX + texArray[textureIdx].width + kGuardMargin > kAtlasSize)
         {
@@ -288,7 +295,7 @@ void PakFile::loadTextureAtlas(const bspheader_t *bspHeader, const uint8_t *data
                              + ((destY >> mipLevel) * destStride + (destX >> mipLevel));
             const uint8_t *src = static_cast<const uint8_t*>(texArray[textureIdx].data[mipLevel]);
             if (src == nullptr)
-                continue;	// Skip unused texture
+                continue;    // Skip unused texture
 
 #define dest_pixel(x, y) dest[(y) * destStride + (x)]
 #define src_pixel(x, y) palette[src[(y) * srcMipWidth + (x)]]
@@ -342,19 +349,25 @@ const int kLightmapSize = 1024;
 
 void PakFile::loadLightmaps(const bspheader_t *bspHeader, const uint8_t *data)
 {
-    const face_t *faces = (const face_t*)(data + bspHeader->faces.offset);
+    const face_t *faces = reinterpret_cast<const face_t*>(data
+        + bspHeader->faces.offset);
     int numFaces = bspHeader->faces.length / sizeof(face_t);
-    const int32_t *edgeList = (const int32_t*)(data + bspHeader->surfedges.offset);
-    const edge_t *edges = (const edge_t*)(data + bspHeader->edges.offset);
-    const texture_info_t *texInfos = (const texture_info_t*)(data + bspHeader->texinfo.offset);
-    const vertex_t *vertices = (const vertex_t*)(data + bspHeader->vertices.offset);
-    const uint8_t *lightmaps = (const uint8_t*)(data + bspHeader->lighting.offset);
+    const int32_t *edgeList = reinterpret_cast<const int32_t*>(data
+        + bspHeader->surfedges.offset);
+    const edge_t *edges = reinterpret_cast<const edge_t*>(data
+        + bspHeader->edges.offset);
+    const texture_info_t *texInfos = reinterpret_cast<const texture_info_t*>(data
+        + bspHeader->texinfo.offset);
+    const vertex_t *vertices = reinterpret_cast<const vertex_t*>(data
+        + bspHeader->vertices.offset);
+    const uint8_t *lightmaps = reinterpret_cast<const uint8_t*>(data
+        + bspHeader->lighting.offset);
 
     fLightmapAtlasEntries = new AtlasEntry[numFaces];
 
-    Surface *lightmapSurface = new Surface(kLightmapSize, kLightmapSize);
-    memset(lightmapSurface->bits(), 0, kLightmapSize * kLightmapSize * 4);
-    uint32_t *destPtr = (uint32_t*) lightmapSurface->bits();
+    Surface *lightmapSurface = new Surface(kLightmapSize, kLightmapSize, Surface::GRAY8);
+    memset(lightmapSurface->bits(), 0, kLightmapSize * kLightmapSize);
+    uint8_t *destPtr = (uint8_t*) lightmapSurface->bits();
 
     // Put a dummy map in the upper left corner for faces that don't have a
     // lightmap (they are black)
@@ -416,7 +429,7 @@ void PakFile::loadLightmaps(const bspheader_t *bspHeader, const uint8_t *data)
 
         AtlasEntry &atlasEnt = fLightmapAtlasEntries[faceIndex];
         if (face.lightOffset < 0)
-            continue;	// No map
+            continue;    // No map
 
         atlasEnt.left = float(lightmapX) / (kLightmapSize - 1);
         atlasEnt.bottom = 1.0 - (float(lightmapY + lightmapPixelHeight - 1) / (kLightmapSize - 1));
@@ -428,19 +441,15 @@ void PakFile::loadLightmaps(const bspheader_t *bspHeader, const uint8_t *data)
         atlasEnt.vOffset = vMin;
 
         // Copy into lightmap
-#define lmap_dest(x, y) destPtr[(lightmapY + y) * kLightmapSize + lightmapX + x]
-
         const uint8_t *lightmapSrc = lightmaps + face.lightOffset;
         for (int y = 0; y < lightmapPixelHeight; y++)
         {
             for (int x = 0; x < lightmapPixelWidth; x++)
             {
-                // Only set lowest channel, others are unused
-                lmap_dest(x, y) = *lightmapSrc++;;
+                destPtr[(lightmapY + y) * kLightmapSize + lightmapX + x]
+                    = *lightmapSrc++;;
             }
         }
-
-#undef lmap_dest
 
         if (lightmapPixelHeight > bandHeight)
             bandHeight = lightmapPixelHeight;
@@ -468,15 +477,23 @@ void PakFile::loadLightmaps(const bspheader_t *bspHeader, const uint8_t *data)
 
 void PakFile::loadBspNodes(const bspheader_t *bspHeader, const uint8_t *data)
 {
-    const leaf_t *leaves = (const leaf_t*)(data + bspHeader->leaves.offset);
-    const uint16_t *faceList = (const uint16_t*)(data + bspHeader->marksurfaces.offset);
-    const face_t *faces = (const face_t*)(data + bspHeader->faces.offset);
-    const int32_t *edgeList = (const int32_t*)(data + bspHeader->surfedges.offset);
-    const edge_t *edges = (const edge_t*)(data + bspHeader->edges.offset);
-    const vertex_t *vertices = (const vertex_t*)(data + bspHeader->vertices.offset);
-    const texture_info_t *texInfos = (const texture_info_t*)(data + bspHeader->texinfo.offset);
-    const bspnode_t *nodes = (const bspnode_t*)(data + bspHeader->nodes.offset);
-    const plane_t *planes = (const plane_t*)(data + bspHeader->planes.offset);
+    const leaf_t *leaves = reinterpret_cast<const leaf_t*>(data + bspHeader->leaves.offset);
+    const uint16_t *faceList = reinterpret_cast<const uint16_t*>(data
+        + bspHeader->marksurfaces.offset);
+    const face_t *faces = reinterpret_cast<const face_t*>(data
+        + bspHeader->faces.offset);
+    const int32_t *edgeList = reinterpret_cast<const int32_t*>(data
+        + bspHeader->surfedges.offset);
+    const edge_t *edges = reinterpret_cast<const edge_t*>(data
+        + bspHeader->edges.offset);
+    const vertex_t *vertices = reinterpret_cast<const vertex_t*>(data
+        + bspHeader->vertices.offset);
+    const texture_info_t *texInfos = reinterpret_cast<const texture_info_t*>(data
+        + bspHeader->texinfo.offset);
+    const bspnode_t *nodes = reinterpret_cast<const bspnode_t*>(data
+        + bspHeader->nodes.offset);
+    const plane_t *planes = reinterpret_cast<const plane_t*>(data
+        + bspHeader->planes.offset);
 
     fNumBspLeaves = bspHeader->leaves.length / sizeof(leaf_t);
     fNumInteriorNodes = bspHeader->nodes.length / sizeof(bspnode_t);
@@ -653,7 +670,7 @@ void PakFile::parseEntities(const char *data)
         }
         else if (*c == '{')
         {
-            if (!inName)
+            if (inName == 0)
             {
                 printf("missing value\n");
                 return;
@@ -667,9 +684,3 @@ void PakFile::parseEntities(const char *data)
             entity = nullptr;
     }
 }
-
-
-
-
-
-

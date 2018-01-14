@@ -14,6 +14,10 @@
 // limitations under the License.
 //
 
+`include "defines.sv"
+
+import defines::*;
+
 //
 // PS/2 keyboard or mouse controller. Only supports receiving.
 //
@@ -24,6 +28,7 @@ module ps2_controller
     (input                      clk,
     input                       reset,
     io_bus_interface.slave      io_bus,
+    output logic                rx_interrupt,
 
     // PS/2 Interface
     input                       ps2_clk,
@@ -50,6 +55,8 @@ module ps2_controller
     logic read_fifo_empty;
     logic fifo_almost_full;
     logic enqueue_en;
+
+    assign rx_interrupt = !read_fifo_empty;
 
     synchronizer #(.WIDTH(2), .RESET_STATE(2'b11)) input_synchronizer(
         .data_i({ps2_clk, ps2_data}),
@@ -131,9 +138,3 @@ module ps2_controller
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-library-flags:("-y ../../core" "-y ../../testbench")
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

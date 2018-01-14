@@ -14,6 +14,10 @@
 // limitations under the License.
 //
 
+`include "defines.sv"
+
+import defines::*;
+
 //
 // Serial Peripheral Interface (SPI) bus controller
 // This currenly can only act as a master
@@ -114,9 +118,3 @@ module spi_controller
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-library-flags:("-y ../../core" "-y ../../testbench")
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

@@ -14,53 +14,55 @@
 // limitations under the License.
 //
 
-#include <assert.h>
-#include <fcntl.h>
 #include <stdio.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include "core.h"
+#include "processor.h"
 #include "device.h"
 #include "fbwindow.h"
 #include "sdmmc.h"
 
 #define KEY_BUFFER_SIZE 64
 
-extern void sendHostInterrupt(uint32_t num);
+extern void send_host_interrupt(uint32_t num);
 
-static uint32_t keyBuffer[KEY_BUFFER_SIZE];
-static int keyBufferHead;
-static int keyBufferTail;
+static uint32_t key_buffer[KEY_BUFFER_SIZE];
+static int key_buffer_head;
+static int key_buffer_tail;
+static struct processor *proc;
 
-void writeDeviceRegister(uint32_t address, uint32_t value)
+void init_device(struct processor *_proc)
+{
+    proc = _proc;
+}
+
+void write_device_register(uint32_t address, uint32_t value)
 {
     switch (address)
     {
         case REG_SERIAL_OUTPUT:
             putc(value & 0xff, stdout);
+            fflush(stdout);
             break;
 
         case REG_SD_WRITE_DATA:
         case REG_SD_CONTROL:
-            writeSdCardRegister(address, value);
+            write_sd_card_register(address, value);
             break;
 
         case REG_VGA_ENABLE:
-            enableFramebuffer(value & 1);
+            enable_frame_buffer(value & 1);
             break;
 
         case REG_VGA_BASE:
-            setFramebufferAddress(value);
+            set_frame_buffer_address(value);
             break;
 
         case REG_HOST_INTERRUPT:
-            sendHostInterrupt(value);
+            send_host_interrupt(value);
             break;
     }
 }
 
-uint32_t readDeviceRegister(uint32_t address)
+uint32_t read_device_register(uint32_t address)
 {
     uint32_t value;
 
@@ -70,37 +72,42 @@ uint32_t readDeviceRegister(uint32_t address)
             return 1;
 
         case REG_KEYBOARD_STATUS:
-            if (keyBufferHead != keyBufferTail)
+            if (key_buffer_head != key_buffer_tail)
                 return 1;
             else
                 return 0;
 
         case REG_KEYBOARD_READ:
-            if (keyBufferHead != keyBufferTail)
+            if (key_buffer_head != key_buffer_tail)
             {
-                value = keyBuffer[keyBufferTail];
-                keyBufferTail = (keyBufferTail + 1) % KEY_BUFFER_SIZE;
+                value = key_buffer[key_buffer_tail];
+                key_buffer_tail = (key_buffer_tail + 1) % KEY_BUFFER_SIZE;
             }
             else
                 value = 0;
+
+            if (key_buffer_head == key_buffer_tail)
+                clear_interrupt(proc, INT_PS2_RX);
 
             return value;
 
         case REG_SD_READ_DATA:
         case REG_SD_STATUS:
-            return readSdCardRegister(address);
+            return read_sd_card_register(address);
 
         default:
             return 0xffffffff;
     }
 }
 
-void enqueueKey(uint32_t scanCode)
+void enqueue_key(uint32_t scan_code)
 {
-    keyBuffer[keyBufferHead] = scanCode;
-    keyBufferHead = (keyBufferHead + 1) % KEY_BUFFER_SIZE;
+    key_buffer[key_buffer_head] = scan_code;
+    key_buffer_head = (key_buffer_head + 1) % KEY_BUFFER_SIZE;
 
     // If the buffer is full, discard the oldest character
-    if (keyBufferHead == keyBufferTail)
-        keyBufferTail = (keyBufferTail + 1) % KEY_BUFFER_SIZE;
+    if (key_buffer_head == key_buffer_tail)
+        key_buffer_tail = (key_buffer_tail + 1) % KEY_BUFFER_SIZE;
+
+    raise_interrupt(proc, INT_PS2_RX);
 }

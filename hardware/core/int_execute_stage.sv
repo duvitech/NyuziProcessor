@@ -16,11 +16,16 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // Instruction Pipeline Integer Execute Stage
 // - Performs simple operations that only require a single stage like integer
 //   addition or bitwise logical operations.
 // - Detects branches
+//
+// (despite the name, this stage also handles floating point reciprocal
+// estimates)
 //
 
 module int_execute_stage(
@@ -30,49 +35,46 @@ module int_execute_stage(
     // From operand_fetch_stage
     input vector_t                    of_operand1,
     input vector_t                    of_operand2,
-    input vector_lane_mask_t          of_mask_value,
+    input vector_mask_t               of_mask_value,
     input                             of_instruction_valid,
     input decoded_instruction_t       of_instruction,
-    input thread_idx_t                of_thread_idx,
+    input local_thread_idx_t          of_thread_idx,
     input subcycle_t                  of_subcycle,
 
     // From writeback_stage
     input logic                       wb_rollback_en,
-    input thread_idx_t                wb_rollback_thread_idx,
-
-    // From control_registers
-    input scalar_t                    cr_eret_address[`THREADS_PER_CORE],
-    input                             cr_supervisor_en[`THREADS_PER_CORE],
-
-    // To control_registers
-    output logic                      ix_is_eret,
+    input local_thread_idx_t          wb_rollback_thread_idx,
 
     // To writeback_stage
     output logic                      ix_instruction_valid,
     output decoded_instruction_t      ix_instruction,
     output vector_t                   ix_result,
-    output vector_lane_mask_t         ix_mask_value,
-    output thread_idx_t               ix_thread_idx,
+    output vector_mask_t              ix_mask_value,
+    output local_thread_idx_t         ix_thread_idx,
     output logic                      ix_rollback_en,
     output scalar_t                   ix_rollback_pc,
     output subcycle_t                 ix_subcycle,
     output logic                      ix_privileged_op_fault,
 
-    // Performance events
-    output logic                      perf_uncond_branch,
-    output logic                      perf_cond_branch_taken,
-    output logic                      perf_cond_branch_not_taken);
+    // From control_registers
+    input scalar_t                    cr_eret_address[`THREADS_PER_CORE],
+    input                             cr_supervisor_en[`THREADS_PER_CORE],
+
+    // To performance_counters
+    output logic                      ix_perf_uncond_branch,
+    output logic                      ix_perf_cond_branch_taken,
+    output logic                      ix_perf_cond_branch_not_taken);
 
     vector_t vector_result;
-    logic is_eret;
+    logic eret;
     logic privileged_op_fault;
     logic branch_taken;
-    logic is_conditional_branch;
-    logic is_valid_instruction;
+    logic conditional_branch;
+    logic valid_instruction;
 
     genvar lane;
     generate
-        for (lane = 0; lane < `VECTOR_LANES; lane++)
+        for (lane = 0; lane < NUM_VECTOR_LANES; lane++)
         begin : lane_alu_gen
             scalar_t lane_operand1;
             scalar_t lane_operand2;
@@ -86,7 +88,7 @@ module int_execute_stage(
             logic[5:0] lz;
             logic[5:0] tz;
             scalar_t reciprocal;
-            ieee754_binary32_t fp_operand;
+            float32_t fp_operand;
             logic[5:0] reciprocal_estimate;
             logic shift_in_sign;
             scalar_t rshift;
@@ -102,7 +104,7 @@ module int_execute_stage(
             // Count leading zeroes
             always_comb
             begin
-                casez (lane_operand2)
+                unique casez (lane_operand2)
                     32'b1???????????????????????????????: lz = 0;
                     32'b01??????????????????????????????: lz = 1;
                     32'b001?????????????????????????????: lz = 2;
@@ -143,7 +145,7 @@ module int_execute_stage(
             // Count trailing zeroes
             always_comb
             begin
-                casez (lane_operand2)
+                unique casez (lane_operand2)
                     32'b00000000000000000000000000000000: tz = 32;
                     32'b10000000000000000000000000000000: tz = 31;
                     32'b?1000000000000000000000000000000: tz = 30;
@@ -215,7 +217,7 @@ module int_execute_stage(
 
             always_comb
             begin
-                case (of_instruction.alu_op)
+                unique case (of_instruction.alu_op)
                     OP_ASHR,
                     OP_SHR: lane_result = rshift;
                     OP_SHL: lane_result = lane_operand1 << lane_operand2[4:0];
@@ -237,8 +239,8 @@ module int_execute_stage(
                     OP_CMPGE_U: lane_result = {{31{1'b0}}, !borrow || zero};
                     OP_CMPLT_U: lane_result = {{31{1'b0}}, borrow && !zero};
                     OP_CMPLE_U: lane_result = {{31{1'b0}}, borrow || zero};
-                    OP_SEXT8: lane_result = {{24{lane_operand2[7]}}, lane_operand2[7:0]};
-                    OP_SEXT16: lane_result = {{16{lane_operand2[15]}}, lane_operand2[15:0]};
+                    OP_SEXT8: lane_result = scalar_t'($signed(lane_operand2[7:0]));
+                    OP_SEXT16: lane_result = scalar_t'($signed(lane_operand2[15:0]));
                     OP_SHUFFLE,
                     OP_GETLANE: lane_result = of_operand1[~lane_operand2];
                     OP_RECIPROCAL: lane_result = reciprocal;
@@ -250,63 +252,51 @@ module int_execute_stage(
         end
     endgenerate
 
-    assign is_valid_instruction = of_instruction_valid
+    assign valid_instruction = of_instruction_valid
         && (!wb_rollback_en || wb_rollback_thread_idx != of_thread_idx)
-        && of_instruction.pipeline_sel == PIPE_SCYCLE_ARITH;
-    assign is_eret = is_valid_instruction
-        && of_instruction.is_branch
+        && of_instruction.pipeline_sel == PIPE_INT_ARITH;
+    assign eret = valid_instruction
+        && of_instruction.branch
         && of_instruction.branch_type == BRANCH_ERET;
-    assign privileged_op_fault = is_eret && !cr_supervisor_en[of_thread_idx];
+    assign privileged_op_fault = eret && !cr_supervisor_en[of_thread_idx];
 
     always_comb
     begin
         branch_taken = 0;
-        is_conditional_branch = 0;
-        perf_uncond_branch = 0;
+        conditional_branch = 0;
 
-        if (is_valid_instruction
-            && of_instruction.is_branch
+        if (valid_instruction
+            && of_instruction.branch
             && !privileged_op_fault)
         begin
             unique case (of_instruction.branch_type)
-                BRANCH_ALL:
-                begin
-                    branch_taken = of_operand1[0][15:0] == 16'hffff;
-                    is_conditional_branch = 1;
-                end
-
                 BRANCH_ZERO:
                 begin
                     branch_taken = of_operand1[0] == 0;
-                    is_conditional_branch = 1;
+                    conditional_branch = 1;
                 end
 
                 BRANCH_NOT_ZERO:
                 begin
                     branch_taken = of_operand1[0] != 0;
-                    is_conditional_branch = 1;
-                end
-
-                BRANCH_NOT_ALL:
-                begin
-                    branch_taken = of_operand1[0][15:0] != 16'hffff;
-                    is_conditional_branch = 1;
+                    conditional_branch = 1;
                 end
 
                 BRANCH_ALWAYS,
                 BRANCH_CALL_OFFSET,
                 BRANCH_CALL_REGISTER,
+                BRANCH_REGISTER,
                 BRANCH_ERET:
                 begin
                     branch_taken = 1;
-                    perf_uncond_branch = 1;
                 end
+
+                default:
+                    ;
             endcase
         end
     end
 
-    assign perf_cond_branch_taken = is_conditional_branch && branch_taken;
-    assign perf_cond_branch_not_taken = is_conditional_branch && !branch_taken;
 
     always_ff @(posedge clk)
     begin
@@ -317,11 +307,12 @@ module int_execute_stage(
         ix_subcycle <= of_subcycle;
 
         // Branch handling
-        case (of_instruction.branch_type)
-            BRANCH_CALL_REGISTER: ix_rollback_pc <= of_operand1[0];
+        unique case (of_instruction.branch_type)
+            BRANCH_CALL_REGISTER,
+            BRANCH_REGISTER: ix_rollback_pc <= of_operand1[0];
             BRANCH_ERET: ix_rollback_pc <= cr_eret_address[of_thread_idx];
             default:
-                ix_rollback_pc <= of_instruction.pc + 4 + of_instruction.immediate_value;
+                ix_rollback_pc <= of_instruction.pc + of_instruction.immediate_value;
         endcase
     end
 
@@ -332,17 +323,18 @@ module int_execute_stage(
             /*AUTORESET*/
             // Beginning of autoreset for uninitialized flops
             ix_instruction_valid <= '0;
-            ix_is_eret <= '0;
+            ix_perf_cond_branch_not_taken <= '0;
+            ix_perf_cond_branch_taken <= '0;
+            ix_perf_uncond_branch <= '0;
             ix_privileged_op_fault <= '0;
             ix_rollback_en <= '0;
             // End of automatics
         end
         else
         begin
-            if (is_valid_instruction)
+            if (valid_instruction)
             begin
                 ix_instruction_valid <= 1;
-                ix_is_eret <= is_eret && !privileged_op_fault;
                 ix_privileged_op_fault <= privileged_op_fault;
                 ix_rollback_en <= branch_taken;
             end
@@ -350,13 +342,11 @@ module int_execute_stage(
             begin
                 ix_instruction_valid <= 0;
                 ix_rollback_en <= 0;
-                ix_is_eret <= 0;
             end
+
+            ix_perf_uncond_branch <= !conditional_branch && branch_taken;
+            ix_perf_cond_branch_taken <= conditional_branch && branch_taken;
+            ix_perf_cond_branch_not_taken <= conditional_branch && !branch_taken;
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

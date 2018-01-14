@@ -14,28 +14,39 @@
 // limitations under the License.
 //
 
-#ifndef __DEVICE_H
-#define __DEVICE_H
+#ifndef DEVICE_H
+#define DEVICE_H
 
 #include <stdint.h>
 
-enum DeviceAddress
-{
-    REG_SERIAL_STATUS = 0x18,
-    REG_SERIAL_OUTPUT = 0x20,
-    REG_KEYBOARD_STATUS = 0x38,
-    REG_KEYBOARD_READ = 0x3c,
-    REG_SD_WRITE_DATA = 0x44,
-    REG_SD_READ_DATA = 0x48,
-    REG_SD_STATUS = 0x4c,
-    REG_SD_CONTROL = 0x50,
-    REG_HOST_INTERRUPT = 0xfc,
-    REG_VGA_ENABLE = 0x110,
-    REG_VGA_BASE = 0x118
-};
+// Memory mapped peripheral register addresses
+#define REG_HOST_INTERRUPT  0xffff0018
+#define REG_SERIAL_STATUS   0xffff0040
+#define REG_SERIAL_OUTPUT   0xffff0048
+#define REG_KEYBOARD_STATUS 0xffff0080
+#define REG_KEYBOARD_READ   0xffff0084
+#define REG_SD_WRITE_DATA   0xffff00c0
+#define REG_SD_READ_DATA    0xffff00c4
+#define REG_SD_STATUS       0xffff00c8
+#define REG_SD_CONTROL      0xffff00cc
+#define REG_THREAD_RESUME   0xffff0100
+#define REG_THREAD_HALT     0xffff0104
+#define REG_VGA_ENABLE      0xffff0180
+#define REG_VGA_BASE        0xffff0188
+#define REG_TIMER_INT       0xffff0240
 
-void writeDeviceRegister(uint32_t address, uint32_t value);
-uint32_t readDeviceRegister(uint32_t address);
-void enqueueKey(uint32_t scanCode);
+// Interrupt bitmask
+#define INT_COSIM 0x00000001
+#define INT_TIMER 0x00000002
+#define INT_UART_RX 0x00000004
+#define INT_PS2_RX 0x00000008
+#define INT_VGA_FRAME 0x00000010
+
+struct processor;
+
+void init_device(struct processor *proc);
+void write_device_register(uint32_t address, uint32_t value);
+uint32_t read_device_register(uint32_t address);
+void enqueue_key(uint32_t scan_code);
 
 #endif

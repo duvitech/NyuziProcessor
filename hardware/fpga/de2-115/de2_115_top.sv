@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 module de2_115_top(
     input                       clk50,
 
@@ -68,55 +70,73 @@ module de2_115_top(
     parameter  bootrom = "../../../software/bootrom/boot.hex";
 
     localparam BOOT_ROM_BASE = 32'hfffee000;
-    localparam UART_BAUD = 921600;
-    localparam CLOCK_RATE = 50000000;
+    localparam NUM_PERIPHERALS = 5;
 
     /*AUTOLOGIC*/
     // Beginning of automatic wires (for undeclared instantiated-module outputs)
+    logic               frame_interrupt;        // From vga_controller of vga_controller.v
     logic               perf_dram_page_hit;     // From sdram_controller of sdram_controller.v
     logic               perf_dram_page_miss;    // From sdram_controller of sdram_controller.v
     logic               processor_halt;         // From nyuzi of nyuzi.v
+    logic               timer_interrupt;        // From timer of timer.v
     // End of automatics
 
-    axi4_interface axi_bus_m[1:0]();
     axi4_interface axi_bus_s[1:0]();
+    axi4_interface axi_bus_m[1:0]();
     logic reset;
     logic clk;
-    io_bus_interface uart_io_bus();
-    io_bus_interface sdcard_io_bus();
-    io_bus_interface ps2_io_bus();
-    io_bus_interface vga_io_bus();
+    scalar_t peripheral_read_data[NUM_PERIPHERALS];
+    io_bus_interface peripheral_io_bus[NUM_PERIPHERALS - 1:0]();
     io_bus_interface nyuzi_io_bus();
-    enum logic[1:0] {
+    jtag_interface jtag();
+    enum logic[$clog2(NUM_PERIPHERALS) - 1:0] {
         IO_UART,
         IO_SDCARD,
-        IO_PS2
-    } io_read_source;
+        IO_PS2,
+        IO_VGA,
+        IO_TIMER
+    } io_bus_source;
+    logic uart_rx_interrupt;
+    logic ps2_rx_interrupt;
+    logic virt_tdo;
+    logic virt_tck;
+    logic virt_tdi;
+    logic virt_data_reg;
+    logic virt_reset;
 
     assign clk = clk50;
 
     nyuzi #(.RESET_PC(BOOT_ROM_BASE)) nyuzi(
-        .interrupt_req(0),
-        .axi_bus(axi_bus_s[0]),
+        .interrupt_req({11'd0,
+            frame_interrupt,
+            ps2_rx_interrupt,
+            uart_rx_interrupt,
+            timer_interrupt,
+            1'b0}),
+        .axi_bus(axi_bus_m[0]),
         .io_bus(nyuzi_io_bus),
+        .jtag(jtag),
         .*);
 
     axi_interconnect #(.M1_BASE_ADDRESS(BOOT_ROM_BASE)) axi_interconnect(
-        .axi_bus_m(axi_bus_m),
         .axi_bus_s(axi_bus_s),
+        .axi_bus_m(axi_bus_m),
         .*);
 
+    // Synchronize from two asynchronous sources, reset_btn is the
+    // pushbutton on the dev board (which goes low when pressed),
+    // and virt_reset comes from the virtual JTAG.
     synchronizer reset_synchronizer(
         .clk(clk),
         .reset(0),
         .data_o(reset),
-        .data_i(!reset_btn));    // Reset button goes low when pressed
+        .data_i(!reset_btn || virt_reset));
 
     // Boot ROM.  Execution starts here. The boot ROM path is relative
     // to the directory that the synthesis tool is invoked from (this
     // directory).
     axi_rom #(.FILENAME(bootrom)) boot_rom(
-        .axi_bus(axi_bus_m[1]),
+        .axi_bus(axi_bus_s[1]),
         .*);
 
     sdram_controller #(
@@ -134,15 +154,15 @@ module de2_115_top(
         .T_RAS_CAS_DELAY(1),        // 21 ns
         .T_CAS_LATENCY(1)           // 21 ns (2 cycles)
     ) sdram_controller(
-        .axi_bus(axi_bus_m[0]),
+        .axi_bus(axi_bus_s[0]),
         .*);
 
     // We always access the full word width, so hard code these to active (low)
     assign dram_dqm = 4'b0000;
 
-    vga_controller #(.BASE_ADDRESS('h110)) vga_controller(
-        .io_bus(vga_io_bus),
-        .axi_bus(axi_bus_s[1]),
+    vga_controller #(.BASE_ADDRESS('h180)) vga_controller(
+        .io_bus(peripheral_io_bus[IO_VGA]),
+        .axi_bus(axi_bus_m[1]),
         .*);
 
 `ifdef WITH_LOGIC_ANALYZER
@@ -151,13 +171,12 @@ module de2_115_top(
     logic trigger;
     logic[31:0] event_count;
 
-    assign capture_data = {};
+    assign capture_data = { perf_dram_page_hit };
     assign capture_enable = 1;
     assign trigger = event_count == 120;
 
     logic_analyzer #(.CAPTURE_WIDTH_BITS($bits(capture_data)),
-        .CAPTURE_SIZE(128),
-        .BAUD_DIVIDE(CLOCK_RATE / UART_BAUD)) logic_analyzer(.*);
+        .CAPTURE_SIZE(128)) logic_analyzer(.*);
 
     always_ff @(posedge clk, posedge reset)
     begin
@@ -167,19 +186,20 @@ module de2_115_top(
             event_count <= event_count + 1;
     end
 `else
-    uart #(.BASE_ADDRESS(24), .CLOCKS_PER_BIT(CLOCK_RATE / UART_BAUD)) uart(
-        .io_bus(uart_io_bus),
+    uart #(.BASE_ADDRESS('h40)) uart(
+        .io_bus(peripheral_io_bus[IO_UART]),
+        .rx_interrupt(uart_rx_interrupt),
         .*);
 `endif
 
 `ifdef BITBANG_SDMMC
-    gpio_controller #(.BASE_ADDRESS('h58), .NUM_PINS(6)) gpio_controller(
-        .io_bus(sdcard_io_bus),
+    gpio_controller #(.BASE_ADDRESS('hc0), .NUM_PINS(6)) gpio_controller(
+        .io_bus(peripheral_io_bus[IO_SDCARD]),
         .gpio_value({sd_clk, sd_cmd, sd_dat}),
         .*);
 `else
-    spi_controller #(.BASE_ADDRESS('h44)) spi_controller(
-        .io_bus(sdcard_io_bus),
+    spi_controller #(.BASE_ADDRESS('hc0)) spi_controller(
+        .io_bus(peripheral_io_bus[IO_SDCARD]),
         .spi_clk(sd_clk),
         .spi_cs_n(sd_dat[3]),
         .spi_miso(sd_dat[0]),
@@ -187,8 +207,13 @@ module de2_115_top(
         .*);
 `endif
 
-    ps2_controller #(.BASE_ADDRESS('h38)) ps2_controller(
-        .io_bus(ps2_io_bus),
+    ps2_controller #(.BASE_ADDRESS('h80)) ps2_controller(
+        .io_bus(peripheral_io_bus[IO_PS2]),
+        .rx_interrupt(ps2_rx_interrupt),
+        .*);
+
+    timer #(.BASE_ADDRESS('h240)) timer(
+        .io_bus(peripheral_io_bus[IO_TIMER]),
         .*);
 
     always_ff @(posedge clk, posedge reset)
@@ -215,51 +240,68 @@ module de2_115_top(
                     'h14: hex3 <= nyuzi_io_bus.write_data[6:0];
                 endcase
             end
+
+            casez (nyuzi_io_bus.address)
+                'h4?: io_bus_source <= IO_UART;
+`ifdef BITBANG_SDMMC
+                'hc?: io_bus_source <= IO_SDCARD;
+`else
+                'hc?: io_bus_source <= IO_SDCARD;
+`endif
+                'h8?: io_bus_source <= IO_PS2;
+
+                default: io_bus_source <= IO_UART;
+            endcase
         end
     end
 
-    assign uart_io_bus.read_en = nyuzi_io_bus.read_en;
-    assign uart_io_bus.write_en = nyuzi_io_bus.write_en;
-    assign uart_io_bus.write_data = nyuzi_io_bus.write_data;
-    assign uart_io_bus.address = nyuzi_io_bus.address;
-    assign ps2_io_bus.read_en = nyuzi_io_bus.read_en;
-    assign ps2_io_bus.write_en = nyuzi_io_bus.write_en;
-    assign ps2_io_bus.write_data = nyuzi_io_bus.write_data;
-    assign ps2_io_bus.address = nyuzi_io_bus.address;
-    assign sdcard_io_bus.read_en = nyuzi_io_bus.read_en;
-    assign sdcard_io_bus.write_en = nyuzi_io_bus.write_en;
-    assign sdcard_io_bus.write_data = nyuzi_io_bus.write_data;
-    assign sdcard_io_bus.address = nyuzi_io_bus.address;
-    assign vga_io_bus.read_en = nyuzi_io_bus.read_en;
-    assign vga_io_bus.write_en = nyuzi_io_bus.write_en;
-    assign vga_io_bus.write_data = nyuzi_io_bus.write_data;
-    assign vga_io_bus.address = nyuzi_io_bus.address;
+    assign nyuzi_io_bus.read_data = peripheral_read_data[io_bus_source];
 
-    always_ff @(posedge clk)
+    genvar io_idx;
+    generate
+        for (io_idx = 0; io_idx < NUM_PERIPHERALS; io_idx++)
+        begin : io_gen
+            assign peripheral_io_bus[io_idx].write_en = nyuzi_io_bus.write_en;
+            assign peripheral_io_bus[io_idx].read_en = nyuzi_io_bus.read_en;
+            assign peripheral_io_bus[io_idx].address = nyuzi_io_bus.address;
+            assign peripheral_io_bus[io_idx].write_data = nyuzi_io_bus.write_data;
+            assign peripheral_read_data[io_idx] = peripheral_io_bus[io_idx].read_data;
+        end
+    endgenerate
+
+    assign jtag.tck = 0;
+    assign jtag.tdi = 0;
+    assign jtag.tms = 0;
+    assign jtag.trst_n = 0;
+
+// It's a little weird to have this in a VENDOR_ALTERA ifdef, since this file
+// is Altera specific, but this is done so Verilator can still run a lint pass
+// on this file to check for errors in CI.
+`ifdef VENDOR_ALTERA
+    //
+    // This virtual JTAG block is independent of the JTAG OCD interface on Nyuzi.
+    // It's used only to be able to reset the processor from the test harness.
+    // It only has one data register, with one bit, which contains the reset
+    // state.
+    //
+    sld_virtual_jtag #(
+        .sld_auto_instance_index("NO"),
+        .sld_instance_index(0),
+        .sld_ir_width(4)
+    ) virtual_jtag(
+        .tck(virt_tck),
+        .tdi(virt_tdi),
+        .tdo(virt_data_reg),
+        .virtual_state_sdr(virt_sdr),   // Shift data register
+        .virtual_state_udr(virt_udr)    // Update data register
+    );
+
+    always @(posedge virt_tck)
     begin
-        case (nyuzi_io_bus.address)
-            'h18, 'h1c: io_read_source <= IO_UART;
-`ifdef BITBANG_SDMMC
-            'h5c: io_read_source <= IO_SDCARD;
-`else
-            'h48, 'h4c: io_read_source <= IO_SDCARD;
+        if (virt_sdr)
+            virt_data_reg <= virt_tdi;
+        else if (virt_udr)
+            virt_reset <= virt_data_reg;
+    end
 `endif
-            'h38, 'h3c: io_read_source <= IO_PS2;
-        endcase
-    end
-
-    always_comb
-    begin
-        case (io_read_source)
-            IO_UART: nyuzi_io_bus.read_data = uart_io_bus.read_data;
-            IO_SDCARD: nyuzi_io_bus.read_data = sdcard_io_bus.read_data;
-            IO_PS2: nyuzi_io_bus.read_data = ps2_io_bus.read_data;
-            default: nyuzi_io_bus.read_data = 0;
-        endcase
-    end
 endmodule
-
-// Local Variables:
-// verilog-library-flags:("-y ../../core" "-y ../../testbench" "-y ../common")
-// verilog-auto-inst-param-value: t
-// End:

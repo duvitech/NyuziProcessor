@@ -16,12 +16,24 @@
 
 #pragma once
 
-inline int getCurrentThreadId()
-{
-    return __builtin_nyuzi_read_control_reg(0);
-}
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-inline unsigned int getCycleCount()
-{
-    return __builtin_nyuzi_read_control_reg(6);
+#define AREA_PLACE_EXACT 0
+#define AREA_PLACE_SEARCH_DOWN 1
+#define AREA_PLACE_SEARCH_UP 2
+
+#define AREA_WIRED 1
+#define AREA_WRITABLE 2
+#define AREA_EXECUTABLE 4
+
+int get_current_thread_id(void);
+unsigned int get_cycle_count(void);
+void *create_area(unsigned int address, unsigned int size, int placement,
+                  const char *name, int flags);
+int exec(const char *path);
+
+#ifdef __cplusplus
 }
+#endif

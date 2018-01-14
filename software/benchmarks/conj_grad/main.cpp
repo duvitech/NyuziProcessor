@@ -6,11 +6,11 @@
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * 	Unless required by applicable law or agreed to in writing, software
- * 	distributed under the License is distributed on an "AS IS" BASIS,
- * 	WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * 	See the License for the specific language governing permissions and
- * 	limitations under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include "conjugate.h"
@@ -18,8 +18,8 @@
 #ifdef __NYUZI__
 #include <stdio.h>
 #include <stdlib.h>
-#ifndef SEED			// defined in a compiler option
-#define SEED	9999	// if not, set your random seed here
+#ifndef SEED            // defined in a compiler option
+#define SEED    9999    // if not, set your random seed here
 #endif
 #else /* !__NYUZI__ */
 #include <cstdio>
@@ -38,7 +38,7 @@ int main(int argc, char *argv[])
 #ifdef __NYUZI__
     srand(SEED);
 #else
-    srand(time(0));		// Init random seed
+    srand(time(0));        // Init random seed
 #endif
     matrix_t A = genSpace();
     vecf16 x_ans = genAns();
@@ -52,9 +52,9 @@ int main(int argc, char *argv[])
     printf("b = \n");
     repr(b);
 
-    vecf16 x[2], p[2], r[3], s;		// x = solution, p = direction, r = residue
-    float alpha, beta;				// vector scalers
-    x[0] = VEC_ZERO;				// Set initial guess to origin
+    vecf16 x[2], p[2], r[3], s;        // x = solution, p = direction, r = residue
+    float alpha, beta;                // vector scalers
+    x[0] = VEC_ZERO;                // Set initial guess to origin
     r[0] = b;
     int iter = 0;
     int cur_r = 0, cur_x, cur_p;
@@ -78,13 +78,13 @@ int main(int argc, char *argv[])
         else
         {
             beta = dot(r[prev_r], r[prev_r]) / dot(r[prev2_r], r[prev2_r]);
-            p[cur_p] = r[prev_r] + (p[prev_p] * __builtin_nyuzi_makevectorf(beta));
+            p[cur_p] = r[prev_r] + (p[prev_p] * vecf16_t(beta));
         }
 
         s = mul(A, p[cur_p]);
         alpha = dot(r[prev_r], r[prev_r]) / dot(p[cur_p], s);
-        x[cur_x] = x[prev_x] + (p[cur_p] * __builtin_nyuzi_makevectorf(alpha));
-        r[cur_r] = r[prev_r] - (s * __builtin_nyuzi_makevectorf(alpha));
+        x[cur_x] = x[prev_x] + (p[cur_p] * vecf16_t(alpha));
+        r[cur_r] = r[prev_r] - (s * vecf16_t(alpha));
 #else /* !__NYUZI__ */
         else
         {

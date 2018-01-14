@@ -21,9 +21,9 @@
 include $(TOPDIR)/build/target.mk
 
 CFLAGS+=-g -Wall -W -fno-rtti -std=c++11 -ffast-math -I$(TOPDIR)/software/libs/librender
-LIBS=-lrender -lc -los
+LIBS=-lrender -lc -los-bare
 
-OBJS := $(SRCS_TO_OBJS) $(TOPDIR)/software/libs/libc/crt0.o
+OBJS := $(SRCS_TO_OBJS) $(CRT0_BARE)
 DEPS := $(SRCS_TO_DEPS)
 
 $(OBJ_DIR)/program.hex: $(OBJ_DIR)/program.elf
@@ -38,25 +38,27 @@ program.lst: $(OBJ_DIR)/program.elf
 clean:
 	rm -rf $(OBJ_DIR)
 
-# Run in emulator
+# Run in emulator. Dump rendered framebuffer to a file 'output.png'.
 run: $(OBJ_DIR)/program.hex
 	@rm -f $(OBJ_DIR)/output.bin output.png
-	$(EMULATOR) -d $(OBJ_DIR)/output.bin,0x200000,0x12C000 $(OBJ_DIR)/program.hex
+	$(EMULATOR) -a -d $(OBJ_DIR)/output.bin,0x200000,0x12C000 $(OBJ_DIR)/program.hex
 	@convert -depth 8 -size 640x480 rgba:$(OBJ_DIR)/output.bin output.png
 
-# Run in verilator
+# Run in verilator. Dump rendered framebuffer to a file 'output.png'.
 verirun: $(OBJ_DIR)/program.hex
 	@rm -f $(OBJ_DIR)/output.bin output.png
 	$(VERILATOR) +memdumpfile=$(OBJ_DIR)/output.bin +memdumpbase=200000 +memdumplen=12C000 +bin=$(OBJ_DIR)/program.hex
 	@convert -depth 8 -size 640x480 rgba:$(OBJ_DIR)/output.bin output.png
 
-# Test (emulator only)
+# Test (emulator only). Run program and compare checksum of framebuffer to
+# value in Makefile. If they do not match, return an error.
 test: $(OBJ_DIR)/program.hex
 	@rm -f $(OBJ_DIR)/output.bin output.png
-	$(EMULATOR) -d $(OBJ_DIR)/output.bin,0x200000,0x12C000 $(OBJ_DIR)/program.hex
+	$(EMULATOR) -a -d $(OBJ_DIR)/output.bin,0x200000,0x12C000 $(OBJ_DIR)/program.hex
 	@shasum $(OBJ_DIR)/output.bin | awk '{if ($$1!=$(IMAGE_CHECKSUM)) {print "FAIL: bad checksum, expected " $(IMAGE_CHECKSUM) " got " $$1; exit 1}}'
 	@echo "PASS"
 
+# Compile and send to FPGA board over serial port.
 fpgarun: $(OBJ_DIR)/program.hex
 	$(SERIAL_BOOT) $(SERIAL_PORT) $(OBJ_DIR)/program.hex
 

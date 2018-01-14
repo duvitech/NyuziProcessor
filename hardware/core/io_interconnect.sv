@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // Accepts IO requests from all cores and serializes requests to external
 // IO interface. Sends responses back to cores.
@@ -24,8 +26,12 @@
 module io_interconnect(
     input                            clk,
     input                            reset,
+
+    // From core
     input [`NUM_CORES - 1:0]         ior_request_valid,
     input ioreq_packet_t             ior_request[`NUM_CORES],
+
+    // To core
     output logic                     ii_ready[`NUM_CORES],
     output logic                     ii_response_valid,
     output iorsp_packet_t            ii_response,
@@ -35,7 +41,7 @@ module io_interconnect(
     logic[`NUM_CORES - 1:0] grant_oh;
     logic request_sent;
     core_id_t request_core;
-    thread_idx_t request_thread_idx;
+    local_thread_idx_t request_thread_idx;
     ioreq_packet_t grant_request;
 
     genvar request_idx;
@@ -57,9 +63,20 @@ module io_interconnect(
 
             oh_to_idx #(.NUM_SIGNALS(`NUM_CORES)) oh_to_idx_grant(
                 .one_hot(grant_oh),
-                .index(grant_idx[`CORE_ID_WIDTH - 1:0]));
+                .index(grant_idx[CORE_ID_WIDTH - 1:0]));
 
-            assign grant_request = ior_request[grant_idx[`CORE_ID_WIDTH - 1:0]];
+            // XXX hack. Ensure high bits are initialized. Notes in defines.sv
+            // describe why the core ID width needs to be hardcoded.
+            if (`NUM_CORES <= 8)
+                assign grant_idx[3] = 0;
+
+            if (`NUM_CORES <= 4)
+                assign grant_idx[2] = 0;
+
+            if (`NUM_CORES <= 2)
+                assign grant_idx[1] = 0;
+
+            assign grant_request = ior_request[grant_idx[CORE_ID_WIDTH - 1:0]];
         end
         else
         begin
@@ -69,8 +86,8 @@ module io_interconnect(
         end
     endgenerate
 
-    assign io_bus.write_en = |grant_oh && grant_request.is_store;
-    assign io_bus.read_en = |grant_oh && !grant_request.is_store;
+    assign io_bus.write_en = |grant_oh && grant_request.store;
+    assign io_bus.read_en = |grant_oh && !grant_request.store;
     assign io_bus.write_data = grant_request.value;
     assign io_bus.address = grant_request.address;
 
@@ -103,10 +120,3 @@ module io_interconnect(
         end
     end
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:
-
-

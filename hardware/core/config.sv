@@ -20,15 +20,17 @@
 //
 // Configurable parameters
 // - Number of cache ways must be 1, 2, 4, or 8 (TLB_WAYS does not have
-//   this limitation)
+//   this constraint). This is a limitation in the cache_lru module.
 // - If you change the number of L2 ways, you must also modify the
 //   flush_l2_cache function in testbench/verilator_tb.sv. Comments above
 //   that function describe how and why.
-// - NUM_CORES must be 1-8. To synthesize more cores, increase CORE_ID_WIDTH
-//   in defines.sv.
+// - NUM_CORES must be 1-16. To synthesize more cores, increase the
+//   width of core_id_t in defines.sv (as above, comments there describe why).
 // - The size of a cache is sets * ways * cache line size (64 bytes)
-// - L1D_SETS sets must be 64 or fewer if virtual address translation is
-//   enabled.
+// - L1D_SETS sets must be 64 or fewer (page size / cache line size). This
+//   avoids aliasing in the virtually indexed/physically tagged L1 cache by
+//   preventing the same physical address from appearing in different cache
+//   sets (see dcache_tag_stage).
 //
 
 `define NUM_CORES 1
@@ -40,9 +42,14 @@
 `define L2_WAYS 8
 `define L2_SETS 256        // 128k
 `define AXI_DATA_WIDTH 32
-`define HAS_MMU 1
 `define ITLB_ENTRIES 64
 `define DTLB_ENTRIES 64
 `define TLB_WAYS 4
+
+// Picked random part version and number to have unique pattern to verify.
+// The manufacturer ID is chosen to be the last possible ID.
+`define JTAG_PART_VERSION 4
+`define JTAG_PART_NUMBER 'hd20d
+`define JTAG_MANUFACTURER_ID {4'b1111,  7'b1111101}
 
 `endif

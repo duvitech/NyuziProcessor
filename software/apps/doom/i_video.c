@@ -39,6 +39,7 @@ rcsid[] = "$Id: i_x.c,v 1.6 1997/02/03 22:45:10 b1 Exp $";
 static unsigned int gPalette[256];
 static clock_t lastFrameTime = 0;
 static int frameCount = 0;
+static unsigned int *fb_base;
 
 void I_ShutdownGraphics(void)
 {
@@ -61,7 +62,7 @@ void I_GetEvent(void)
 void I_StartTic (void)
 {
     // Read keyboard
-    unsigned int code = pollKeyboard();
+    unsigned int code = poll_keyboard();
     if (code != 0xffffffff)
     {
         event_t event;
@@ -159,7 +160,7 @@ void I_UpdateNoBlit (void)
 void I_FinishUpdate (void)
 {
     int x, y, offs;
-    veci16_t *dest = (veci16_t*) 0x200000;
+    veci16_t *dest = (veci16_t*) fb_base;
     const unsigned char *src = screens[0];
     veci16_t pixelVals;
     int mask;
@@ -169,10 +170,10 @@ void I_FinishUpdate (void)
     {
         for (x = 0; x < SCREENWIDTH; x += 8)
         {
-            mask = 0xc000;
-            for (offs = 0; offs < 8; offs++, mask >>= 2)
+            mask = 0x0003;
+            for (offs = 0; offs < 8; offs++, mask <<= 2)
             {
-                pixelVals = __builtin_nyuzi_vector_mixi(mask, __builtin_nyuzi_makevectori(gPalette[*src++]),
+                pixelVals = __builtin_nyuzi_vector_mixi(mask, (veci16_t) gPalette[*src++],
                                                         pixelVals);
             }
 
@@ -226,7 +227,7 @@ void I_SetPalette (byte* palette)
 
 void I_InitGraphics(void)
 {
-    initVGA(VGA_MODE_640x400);
+    fb_base = init_vga(VGA_MODE_640x400);
 }
 
 

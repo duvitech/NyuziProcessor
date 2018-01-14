@@ -16,6 +16,8 @@
 
 `include "defines.sv"
 
+import defines::*;
+
 //
 // L2 cache pipeline - update stage.
 // - Update cache data if this is a cache fill or store.
@@ -33,15 +35,15 @@ module l2_cache_update_stage(
     input cache_line_data_t                        l2r_data,
     input                                          l2r_cache_hit,
     input logic[$clog2(`L2_WAYS * `L2_SETS) - 1:0] l2r_hit_cache_idx,
-    input                                          l2r_is_l2_fill,
-    input                                          l2r_is_restarted_flush,
+    input                                          l2r_l2_fill,
+    input                                          l2r_restarted_flush,
     input cache_line_data_t                        l2r_data_from_memory,
     input                                          l2r_store_sync_success,
     input                                          l2r_needs_writeback,
 
     // To l2_cache_read_stage
     output logic                                   l2u_write_en,
-    output [$clog2(`L2_WAYS * `L2_SETS) - 1:0]     l2u_write_addr,
+    output logic[$clog2(`L2_WAYS * `L2_SETS) - 1:0] l2u_write_addr,
     output cache_line_data_t                       l2u_write_data,
 
     // To cores
@@ -51,15 +53,15 @@ module l2_cache_update_stage(
     cache_line_data_t original_data;
     logic update_data;
     l2rsp_packet_type_t response_type;
-    logic is_completed_flush;
+    logic completed_flush;
 
-    assign original_data = l2r_is_l2_fill ? l2r_data_from_memory : l2r_data;
+    assign original_data = l2r_l2_fill ? l2r_data_from_memory : l2r_data;
     assign update_data = l2r_request.packet_type == L2REQ_STORE
         || (l2r_request.packet_type == L2REQ_STORE_SYNC && l2r_store_sync_success);
 
     genvar byte_lane;
     generate
-        for (byte_lane = 0; byte_lane < `CACHE_LINE_BYTES; byte_lane++)
+        for (byte_lane = 0; byte_lane < CACHE_LINE_BYTES; byte_lane++)
         begin : lane_mask_gen
             assign l2u_write_data[byte_lane * 8+:8] = (l2r_request.store_mask[byte_lane] && update_data)
                 ? l2r_request.data[byte_lane * 8+:8]
@@ -68,14 +70,14 @@ module l2_cache_update_stage(
     endgenerate
 
     assign l2u_write_en = l2r_request_valid
-        && (l2r_is_l2_fill || (l2r_cache_hit && (l2r_request.packet_type == L2REQ_STORE
+        && (l2r_l2_fill || (l2r_cache_hit && (l2r_request.packet_type == L2REQ_STORE
         || l2r_request.packet_type == L2REQ_STORE_SYNC)));
     assign l2u_write_addr = l2r_hit_cache_idx;
 
     // Response packet type
     always_comb
     begin
-        case (l2r_request.packet_type)
+        unique case (l2r_request.packet_type)
             L2REQ_LOAD,
             L2REQ_LOAD_SYNC:
                 response_type = L2RSP_LOAD_ACK;
@@ -101,8 +103,8 @@ module l2_cache_update_stage(
     // Check that this is either:
     // - The first pass for a flush request and the data wasn't in the cache
     // - The second pass for a flush request that has written its data back
-    assign is_completed_flush = l2r_request.packet_type == L2REQ_FLUSH
-        && (l2r_is_restarted_flush || !l2r_cache_hit || !l2r_needs_writeback);
+    assign completed_flush = l2r_request.packet_type == L2REQ_FLUSH
+        && (l2r_restarted_flush || !l2r_cache_hit || !l2r_needs_writeback);
 
     always_ff @(posedge clk, posedge reset)
     begin
@@ -112,16 +114,16 @@ module l2_cache_update_stage(
         begin
             if (l2r_request_valid
                 && ((l2r_cache_hit && l2r_request.packet_type != L2REQ_FLUSH)
-                || l2r_is_l2_fill
-                || is_completed_flush
+                || l2r_l2_fill
+                || completed_flush
                 || l2r_request.packet_type == L2REQ_DINVALIDATE
                 || l2r_request.packet_type == L2REQ_IINVALIDATE))
             begin
                 // Restarted flush must have packet type L2REQ_FLUSH
-                assert(!l2r_is_restarted_flush || l2r_request.packet_type == L2REQ_FLUSH);
+                assert(!l2r_restarted_flush || l2r_request.packet_type == L2REQ_FLUSH);
 
                 // Cannot be both a fill and restarted flush
-                assert(!l2r_is_restarted_flush || !l2r_is_l2_fill);
+                assert(!l2r_restarted_flush || !l2r_l2_fill);
 
                 l2_response_valid <= 1;
             end
@@ -142,8 +144,3 @@ module l2_cache_update_stage(
         l2_response.address <= l2r_request.address;
     end
 endmodule
-
-// Local Variables:
-// verilog-typedef-regexp:"_t$"
-// verilog-auto-reset-widths:unbased
-// End:

@@ -23,12 +23,13 @@ CFLAGS+=$(shell sdl2-config --cflags)
 #CFLAGS+=-DDUMP_INSTRUCTION_STATS
 
 SRCS=main.c \
-	core.c \
+	processor.c \
 	cosimulation.c \
 	remote-gdb.c \
 	device.c \
 	fbwindow.c \
-	sdmmc.c
+	sdmmc.c \
+	util.c
 
 LIBS=-lm $(shell sdl2-config --libs)
 
@@ -39,7 +40,7 @@ all: $(OBJDIR) $(BINDIR) $(TARGET)
 
 $(TARGET): $(OBJS) $(DEPS)
 	echo $(OBJS)
-	gcc -g -o $@ $(OBJS) $(LIBS)
+	$(CC) -g -o $@ $(OBJS) $(LIBS)
 
 clean:
 	rm -rf $(OBJ_DIR)

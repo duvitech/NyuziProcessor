@@ -10,10 +10,10 @@ In addition to the packages listed in the top level README, this also requires
 ## Setup
 
 1. This loads programs onto the board over the serial port, so your development
-machine must be connected to the FPGA board with a serial cable.
+machine must be connected to the FPGA board with a serial cable.<sup>1</sup>
 
 2. Set the environment variable SERIAL_PORT to the path of the serial device.
-For a Prolific USB based dongle, for example, the path is.
+For example:
 
         export SERIAL_PORT="/dev/ttyUSB0"
 
@@ -22,9 +22,18 @@ For a Prolific USB based dongle, for example, the path is.
 
 	    /dev/ttyS0
 
+    This defaults to 921600 baud. If your serial device does not
+    support this, you can change the rate the rate by modifying the
+    DEFAULT_UART_BAUD define in the following two files:
+
+        software/bootrom/boot.c
+        tools/serial_boot/serial_boot.c
+
 3. Ensure you can access the serial port without being root:
 
         sudo usermod -a -G dialout $USER
+
+    You may need to log out and back in for the change to take effect.
 
 4. Make sure the Quartus binary directory is in your PATH environment variable.
    The default install path is ~/altera/[version]/quartus/bin/
@@ -35,9 +44,26 @@ For a Prolific USB based dongle, for example, the path is.
 
 On some distributions of Linux, the Altera tools have trouble talking to USB if not
 run as root. You can remedy this by creating a file
-/etc/udev/rules.d/99-custom.rules and adding the following line:
+/etc/udev/rules.d/99-usbblaster.rules and adding the following line:
 
     ATTRS{idVendor}=="09fb" , MODE="0660" , GROUP="plugdev"
+
+Reboot or execute the following command:
+
+    sudo udevadm control --reload
+    sudo killall -9 jtagd
+
+<sup>1</sup> *Since most computers don't have native serial ports any more, this
+will probably require a USB to serial adapter. Almost all of the adapters you
+can buy use one of two chipsets, produced by either FTDI or Prolific. The
+Prolific chips are more... common, especially in cheaper adapters. But the
+OS drivers for these chips are unstable, especially when transferring large
+amounts of data like this project does. They often hang mid transfer or cause
+the host machine to reboot. I would recommend finding one with a FTDI based
+chipset. Unfortunately, most serial cables do not advertise which chipset
+they use, but you can sometimes tell by going to their website to download
+the drivers. Also, if you search for 'FTDI USB serial' on a retail site like
+Amazon, there are a number that do explicitly note the chipset type.*
 
 ## Synthesizing and Running Programs
 
@@ -51,9 +77,13 @@ The build system is command line based and does not use the Quartus GUI.
 
         make program
 
-3. Press 'key 0' on the lower right hand of the board to reset the processor. LED 0
-   will light up on the board to indicate the bootloader is waiting to receive a
-   program over the serial port.
+    You may get an error when running this command. If so, this can usually be fixed by doing:
+
+        sudo killall -9 jtagd
+
+3. Press 'key 0' on the lower right hand of the board to reset the processor.
+   Green LED 0 will start blinking, indicating the bootloader is waiting to
+   receive a program over the serial port.
 
 4. Load program into memory and execute it:
 

@@ -73,15 +73,18 @@ char *readResourceFile()
     if (fread(&header, sizeof(header), 1, fp) != 1)
     {
         printf("error reading resource file header\n");
+        fclose(fp);
         return nullptr;
     }
 
-    printf("reading resource file, %d bytes\n", header.fileSize);
+    printf("reading resource file, %u bytes\n", header.fileSize);
 
-    resourceData = (char*) malloc(header.fileSize);
+    resourceData = static_cast<char*>(malloc(header.fileSize));
     fseek(fp, 0, SEEK_SET);
     if (fread(resourceData, header.fileSize, 1, fp) != 1)
     {
+        fclose(fp);
+        free(resourceData);
         printf("error reading resource file\n");
         return nullptr;
     }
@@ -112,7 +115,7 @@ Texture *createCheckerboardTexture()
         int mipSize = kTestTextureSize >> mipLevel;
         int subCheckerSize = kCheckerSize >> mipLevel;
         uint32_t checkerColor = kColors[mipLevel];
-        Surface *surface = new Surface(mipSize, mipSize);
+        Surface *surface = new Surface(mipSize, mipSize, Surface::RGBA8888);
         uint32_t *bits = (uint32_t*) surface->bits();
         for (int x = 0; x < mipSize; x++)
         {
@@ -138,15 +141,19 @@ Texture *createCheckerboardTexture()
 // All threads start execution here.
 int main()
 {
-    if (getCurrentThreadId() == 0)
-        initVGA(VGA_MODE_640x480);
-    else
-        workerThread();
+    void *frameBuffer;
+    if (get_current_thread_id() != 0)
+        worker_thread();
+
+    // Set up render context
+    frameBuffer = init_vga(VGA_MODE_640x480);
 
     // Set up resource data
     char *resourceData = readResourceFile();
     const FileHeader *resourceHeader = (FileHeader*) resourceData;
+#ifndef TEST_TEXTURE
     const TextureEntry *texHeader = (TextureEntry*)(resourceData + sizeof(FileHeader));
+#endif
     const MeshEntry *meshHeader = (MeshEntry*)(resourceData + sizeof(FileHeader) + resourceHeader->numTextures
                                   * sizeof(TextureEntry));
     Texture **textures = new Texture*[resourceHeader->numTextures];
@@ -166,7 +173,8 @@ int main()
         {
             int width = texHeader[textureIndex].width >> mipLevel;
             int height = texHeader[textureIndex].height >> mipLevel;
-            Surface *surface = new Surface(width, height, resourceData + offset);
+            Surface *surface = new Surface(width, height, Surface::RGBA8888,
+                resourceData + offset);
             textures[textureIndex]->setMipSurface(mipLevel, surface);
             offset += width * height * 4;
         }
@@ -188,8 +196,8 @@ int main()
     // Set up render state
     RenderContext *context = new RenderContext(0x1000000);
     RenderTarget *renderTarget = new RenderTarget();
-    Surface *colorBuffer = new Surface(FB_WIDTH, FB_HEIGHT, (void*) 0x200000);
-    Surface *depthBuffer = new Surface(FB_WIDTH, FB_HEIGHT);
+    Surface *colorBuffer = new Surface(FB_WIDTH, FB_HEIGHT, Surface::RGBA8888, frameBuffer);
+    Surface *depthBuffer = new Surface(FB_WIDTH, FB_HEIGHT, Surface::FLOAT);
     renderTarget->setColorBuffer(colorBuffer);
     renderTarget->setDepthBuffer(depthBuffer);
     context->bindTarget(renderTarget);
@@ -209,7 +217,7 @@ int main()
     uniforms.fAmbient = 0.4f;
     float theta = 0.0;
 
-    startAllThreads();
+    start_all_threads();
 
     for (int frame = 0; ; frame++)
     {
@@ -244,6 +252,8 @@ int main()
         context->finish();
         printf("rendered frame in %d uS\n", clock() - startTime);
     }
+
+    delete[] textures;
 
     return 0;
 }

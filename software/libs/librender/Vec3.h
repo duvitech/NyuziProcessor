@@ -22,6 +22,9 @@
 namespace librender
 {
 
+//
+// 3 element vector
+//
 class Vec3
 {
 public:
@@ -38,6 +41,9 @@ public:
         fValues[1] = b;
         fValues[2] = c;
     }
+
+    Vec3(const Vec3 &rhs) = default;
+    Vec3 &operator=(const Vec3 &rhs) = default;
 
     Vec3 operator+(const Vec3 &other) const
     {
@@ -129,4 +135,4 @@ private:
     float fValues[3];
 };
 
-}
+} // namespace librender

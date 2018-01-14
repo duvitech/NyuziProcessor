@@ -18,10 +18,12 @@ TOPDIR=../../../
 
 include $(TOPDIR)/build/target.mk
 
-LIBS=-lc -los
+LIBS=-lc -los-bare
+CFLAGS+=-Werror
+
 SRCS=membench.c
 
-OBJS=$(TOPDIR)/software/libs/libc/crt0.o $(SRCS_TO_OBJS)
+OBJS=$(CRT0_BARE) $(SRCS_TO_OBJS)
 DEPS=$(SRCS_TO_DEPS)
 
 $(OBJ_DIR)/membench.hex: $(OBJS)

@@ -18,18 +18,25 @@ TOPDIR=../../..
 
 include $(TOPDIR)/build/target.mk
 
-chargen.hex: chargen.c
-	$(CC) $(CFLAGS) chargen.c -o chargen.elf ../../../software/libs/libc/crt0.o
-	$(ELF2HEX) -o chargen.hex chargen.elf
+LIBS=-lc
+SRCS=chargen.c
 
-fpgarun: chargen.hex
-	$(SERIAL_BOOT) $(SERIAL_PORT) chargen.hex
+OBJS := $(SRCS_TO_OBJS)
+DEPS := $(SRCS_TO_DEPS)
+
+$(OBJ_DIR)/chargen.hex: $(CRT0_BARE) $(OBJS)
+	$(LD) -o $(OBJ_DIR)/chargen.elf $(LDFLAGS) $(CRT0_BARE) $(OBJS) $(LIBS) -los-bare $(LDFLAGS)
+	$(ELF2HEX) -o $(OBJ_DIR)/chargen.hex $(OBJ_DIR)/chargen.elf
+
+fpgarun: $(OBJ_DIR)/chargen.hex
+	$(SERIAL_BOOT) $(SERIAL_PORT) $(OBJ_DIR)/chargen.hex
 
 run-verilator: chargen.hex
-	../../../bin/verilator_model +bin=chargen.hex
+	../../../bin/verilator_model +bin=$(OBJ_DIR)/chargen.hex
 
 clean: FORCE
 	rm -f chargen.elf chargen.hex
 
 FORCE:
 
+-include $(DEPS)

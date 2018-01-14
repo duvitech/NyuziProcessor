@@ -36,7 +36,7 @@
 
 static const char *kHexDigits = "0123456789abcdef";
 static const char *kFlagCharacters = "-+ 0";
-static const char *kPrefixCharacters = "FNhlL";
+static const char *kPrefixCharacters = "FNhlLzt";
 
 /*
  *	 % flags width .precision prefix format
@@ -141,9 +141,7 @@ int vfprintf(FILE *f, const char *format, va_list args)
                     case 'u':	/* Unsigned decimal */
                     case 'd':
                     case 'i':	{ /* Signed decimal */
-                        unsigned int value;
-                        value = va_arg(args, unsigned);		/* long */
-
+                        unsigned long long value;
                         /* figure out base */
                         if (*format == 'o')
                             radix = 8;
@@ -152,10 +150,19 @@ int vfprintf(FILE *f, const char *format, va_list args)
                         else
                             radix = 10;
 
+                        if (PREFIX_IS_SET('L')) {
+                            value = (unsigned long long int) va_arg(args, long long);
+                        } else {
+                            if ((*format == 'd' || *format == 'i'))
+                                value = (unsigned long long int)(long long int) va_arg(args, int);
+                            else
+                                value = (unsigned long long int) va_arg(args, unsigned int);
+                        }
+
                         /* handle sign */
                         if ((*format == 'd' || *format == 'i')) {
-                            if ((long) value < 0) {
-                                value = (unsigned) (- (long) value);
+                            if ((long long int) value < 0) {
+                                value = (unsigned long long) (-(long long int) value);
                                 fputc('-', f);
                             }
                         }
@@ -228,7 +235,7 @@ int vfprintf(FILE *f, const char *format, va_list args)
                         // See "How to Print Floating Point Numbers Accurately" by Guy L. Steele Jr.
                         // and Jon L. White for the gory details.
                         // XXX does not handle inf and NaN
-                        float floatval = va_arg(args, float);
+                        double floatval = va_arg(args, double);
                         int wholePart;
                         float frac;
 
